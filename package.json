@@ -1,7 +1,7 @@
 {
   "name": "model-hub",
   "productName": "Model Hub",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop workspace for local and cloud AI models: model library, chat with seamless model switching, shared browser, terminal, Git panel and Android emulator",
   "author": "Erib45",
   "main": "src/main.js",

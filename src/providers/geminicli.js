@@ -31,16 +31,22 @@ function env() {
 
 // The app owns this profile's settings: Google sign-in, excluded tools, and
 // (while a turn runs) the Model Hub MCP server.
-function writeSettings(mcp) {
+// forLogin: leave the sign-in method unset. If it's preset, Gemini CLI tries to
+// sign in at startup, before its interactive screen can ask for consent, and
+// fails ("Authentication consent could not be obtained"). Choosing "Sign in with
+// Google" in its menu works, and Gemini then saves that choice itself.
+function writeSettings(mcp, { forLogin = false } = {}) {
   fs.mkdirSync(dotGemini(), { recursive: true });
   const file = path.join(dotGemini(), 'settings.json');
   let current = {};
   try {
     current = JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch {}
+  const { selectedType, ...otherAuth } = current.security?.auth || {};
+  const auth = forLogin ? otherAuth : { ...otherAuth, selectedType: 'oauth-personal' };
   const next = {
     ...current,
-    security: { ...(current.security || {}), auth: { ...(current.security?.auth || {}), selectedType: 'oauth-personal' } },
+    security: { ...(current.security || {}), auth },
     tools: { ...(current.tools || {}), exclude: OVERLAPPING_TOOLS },
     mcpServers: mcp ? { modelhub: { ...mcp, trust: true } } : {},
   };
@@ -88,15 +94,27 @@ module.exports = {
   // in-app terminal session (returns a launch spec).
   login() {
     if (!script()) throw new Error('Gemini CLI is not installed. Install it from Settings → Check dependencies.');
-    writeSettings(null);
+    writeSettings(null, { forLogin: true });
     statusCache = null;
+    // Start in an empty folder: in the profile folder itself Gemini sees its own
+    // settings file as project config and first asks whether to trust the folder.
+    const cwd = path.join(home(), 'signin');
+    fs.mkdirSync(cwd, { recursive: true });
+    // Pre-trust this empty folder so Gemini goes straight to its sign-in menu.
+    const trustFile = path.join(dotGemini(), 'trustedFolders.json');
+    let trusted = {};
+    try {
+      trusted = JSON.parse(fs.readFileSync(trustFile, 'utf8'));
+    } catch {}
+    trusted[cwd] = 'TRUST_FOLDER';
+    fs.writeFileSync(trustFile, JSON.stringify(trusted, null, 2));
     return {
       ...nodeLaunch(script(), [], env()),
-      cwd: home(),
+      cwd,
       title: 'Sign in: Gemini CLI',
       kind: 'login',
       provider: 'geminicli',
-      hint: 'Gemini CLI opens your browser to sign in with Google. When it shows its prompt afterwards, type /quit and press Enter.',
+      hint: 'Choose "Sign in with Google" and press Enter; your browser opens to sign in. When Gemini shows its chat prompt afterwards, type /quit and press Enter.',
     };
   },
 

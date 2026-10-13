@@ -29,7 +29,8 @@ function create(spec, send, { cols = 100, rows = 30 } = {}) {
     cols,
     rows,
     cwd: shell.cwd && fs.existsSync(shell.cwd) ? shell.cwd : process.env.USERPROFILE,
-    env: shell.env || process.env,
+    // xterm.js renders 24-bit color; tell programs so they don't fall back to 16 colors.
+    env: { ...(shell.env || process.env), TERM: 'xterm-256color', COLORTERM: 'truecolor' },
     useConpty: true,
   });
   const session = { proc, title: spec.title || 'PowerShell', kind: spec.kind || 'shell', provider: spec.provider };
