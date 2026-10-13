@@ -9,7 +9,7 @@ const { app } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { npmDir, openConsole, psQuote, spawnNodeCli, killTree, jsonLines, runToEnd, buildPrompt, mcpServerEntry, stripMcpPrefix } = require('./cli-common');
+const { npmDir, nodeLaunch, spawnNodeCli, killTree, jsonLines, runToEnd, buildPrompt, mcpServerEntry, stripMcpPrefix } = require('./cli-common');
 
 const home = () => path.join(app.getPath('userData'), 'gemini-home');
 const dotGemini = () => path.join(home(), '.gemini');
@@ -17,7 +17,6 @@ const script = () => {
   const p = path.join(npmDir(), 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js');
   return fs.existsSync(p) ? p : null;
 };
-const cmdShim = () => path.join(npmDir(), 'gemini.cmd');
 
 const OVERLAPPING_TOOLS = ['run_shell_command', 'google_web_search', 'web_fetch', 'read_file', 'write_file'];
 
@@ -85,15 +84,20 @@ module.exports = {
     statusCache = null;
   },
 
+  // Gemini CLI's own "Login with Google" flow (its interactive mode), run in an
+  // in-app terminal session (returns a launch spec).
   login() {
-    if (!script()) throw new Error('Gemini CLI is not installed (npm i -g @google/gemini-cli).');
+    if (!script()) throw new Error('Gemini CLI is not installed. Install it from Settings → Check dependencies.');
     writeSettings(null);
     statusCache = null;
-    openConsole(
-      'Sign in to Gemini CLI (Model Hub)',
-      `Write-Host 'Gemini CLI will open your browser to sign in with Google. When it shows its prompt, type /quit and press Enter.'; Write-Host ''; & ${psQuote(cmdShim())}`,
-      env()
-    );
+    return {
+      ...nodeLaunch(script(), [], env()),
+      cwd: home(),
+      title: 'Sign in: Gemini CLI',
+      kind: 'login',
+      provider: 'geminicli',
+      hint: 'Gemini CLI opens your browser to sign in with Google. When it shows its prompt afterwards, type /quit and press Enter.',
+    };
   },
 
   async logout() {

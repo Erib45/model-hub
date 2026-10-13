@@ -289,7 +289,6 @@ details.thinking div { white-space: pre-wrap; }
 .term-run pre { margin: 3px 0; white-space: pre-wrap; word-break: break-all; color: var(--term-text); font-family: var(--mono); }
 .term-exit { font-size: 11px; }
 .term-exit.bad { color: var(--danger); }
-#termForm { border-top: 1px solid var(--border); padding: 7px 10px; display: flex; flex-direction: column; gap: 3px; }
 #termCwd { font-size: 11px; font-family: var(--mono); }
 .prompt { font-family: var(--mono); color: var(--accent); }
 #termInput { font-family: var(--mono); }
@@ -420,3 +419,20 @@ li.empty { padding: 4px 10px; cursor: default; list-style: none; }
 .setup-line { font-family: var(--mono); color: var(--accent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .setup-side { flex-shrink: 0; }
 .setup-ok { display: inline-flex; gap: 6px; align-items: center; color: var(--ok); font-size: 12.5px; }
+
+/* ============ Interactive terminal ============ */
+.term-tabs { display: flex; gap: 2px; padding: 4px 6px 0; border-bottom: 1px solid var(--border); align-items: flex-end; overflow-x: auto; flex-shrink: 0; }
+.term-tab { border: 1px solid transparent; border-bottom: none; border-radius: 7px 7px 0 0; background: transparent; padding: 5px 10px; font-size: 12.5px; color: var(--muted); gap: 6px; margin-bottom: -1px; }
+.term-tab:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
+.term-tab.active { background: var(--term-bg); border-color: var(--border); color: var(--text); }
+.term-tab.login .t { color: var(--accent); }
+.term-tab.exited .t { opacity: .55; }
+.term-tab .close { display: inline-flex; opacity: .5; }
+.term-tab .close:hover { opacity: 1; color: var(--danger); }
+.term-tab .close .ic { width: 12px; height: 12px; }
+.term-pane { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--term-bg); }
+#termXterms { position: relative; padding: 6px 4px 4px 8px; }
+.xterm-host { position: absolute; inset: 6px 4px 4px 8px; }
+.xterm-host .xterm { height: 100%; }
+.xterm .xterm-viewport { background-color: transparent !important; }
+.term-foot { border-top: 1px solid var(--border); padding: 5px 10px; font-size: 11px; font-family: var(--mono); }

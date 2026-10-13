@@ -17,7 +17,10 @@
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.133.0"
+    "@anthropic-ai/sdk": "^0.133.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "node-pty": "^1.1.0"
   },
   "build": {
     "appId": "com.modelhub.desktop",
@@ -32,6 +35,7 @@
       "package.json"
     ],
     "asarUnpack": [
+      "node_modules/node-pty/**",
       "src/claudecode/mcp-server.js"
     ],
     "win": {
@@ -46,6 +50,7 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Model Hub",
       "artifactName": "Model-Hub-Setup-${version}.exe"
-    }
+    },
+    "npmRebuild": false
   }
 }

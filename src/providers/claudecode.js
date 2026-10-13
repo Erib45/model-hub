@@ -153,14 +153,14 @@ module.exports = {
     return res.result || '';
   },
 
-  // Opens a console window running Anthropic's own sign-in flow.
+  // Anthropic's own sign-in flow, run in an in-app terminal session (returns a launch spec).
   login() {
     const exe = findClaude();
-    if (!exe) throw new Error('Claude Code is not installed. Install it from https://claude.com/claude-code');
+    if (!exe) throw new Error('Claude Code is not installed. Install it from Settings → Check dependencies.');
     fs.mkdirSync(configDir(), { recursive: true });
     statusCache = null;
-    const script = `$host.UI.RawUI.WindowTitle = 'Sign in to Claude Code (Model Hub)'; & '${exe.replace(/'/g, "''")}' auth login; Write-Host ''; Write-Host 'You can close this window.'; Read-Host 'Press Enter to close'`;
-    spawn('cmd.exe', ['/c', 'start', '""', 'powershell.exe', '-NoProfile', '-Command', script], { env: cliEnv(), detached: true, stdio: 'ignore' }).unref();
+    const launch = exe.endsWith('.cmd') ? { file: 'cmd.exe', args: ['/c', exe, 'auth', 'login'] } : { file: exe, args: ['auth', 'login'] };
+    return { ...launch, env: cliEnv(), title: 'Sign in: Claude Code', kind: 'login', provider: 'claudecode' };
   },
 
   logout() {
@@ -216,7 +216,7 @@ ${userText}`
     args.push('--permission-prompts', 'none');
 
     const child = spawnClaude(args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
-    const kill = () => execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {});
+    const kill = () => execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
     signal.addEventListener('abort', kill);
     child.stdin.end(prompt);
 

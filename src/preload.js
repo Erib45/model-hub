@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('hub', {
     ollamaSignout: invoke('accounts:ollamaSignout'),
     copySshKey: invoke('accounts:copySshKey'),
     cliLogin: invoke('accounts:cliLogin'),
+    cliStatus: invoke('accounts:cliStatus'),
     cliLogout: invoke('accounts:cliLogout'),
   },
   recommend: { ai: invoke('recommend:ai') },
@@ -83,6 +84,14 @@ contextBridge.exposeInMainWorld('hub', {
   system: { info: invoke('system:info') },
   approvals: { onRequest: on('approval:request'), respond: invoke('approval:respond') },
   settings: { get: invoke('settings:get'), set: invoke('settings:set'), pickFolder: invoke('settings:pickFolder'), pickFile: invoke('settings:pickFile') },
+  pty: {
+    create: invoke('pty:create'),
+    write: (id, data) => ipcRenderer.send('pty:write', id, data),
+    resize: (id, cols, rows) => ipcRenderer.send('pty:resize', id, cols, rows),
+    kill: invoke('pty:kill'),
+    onData: on('pty:data'),
+    onExit: on('pty:exit'),
+  },
   terminal: {
     run: invoke('terminal:run'),
     kill: invoke('terminal:kill'),

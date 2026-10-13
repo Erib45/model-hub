@@ -10,22 +10,30 @@ const readline = require('readline');
 
 const npmDir = () => path.join(process.env.APPDATA || '', 'npm');
 
-// Opens a visible PowerShell window (sign-in flows may need typing/pasting).
-function openConsole(title, command, env) {
-  const script = `$host.UI.RawUI.WindowTitle = '${title.replace(/'/g, "''")}'; ${command}; Write-Host ''; Write-Host 'You can close this window.'; Read-Host 'Press Enter to close'`;
-  spawn('cmd.exe', ['/c', 'start', '""', 'powershell.exe', '-NoProfile', '-Command', script], { env, detached: true, stdio: 'ignore' }).unref();
+// Prefer the real node.exe: it's a console program, so with windowsHide it gets
+// a hidden console that every process it starts inherits. (Electron's own Node
+// has no console, so CLIs that launch helper programs, like Codex's launcher,
+// would flash a visible console window.) Falls back to Electron's bundled Node.
+function findNode() {
+  const candidates = (process.env.PATH || '').split(path.delimiter).map((d) => path.join(d, 'node.exe'));
+  candidates.push(path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'node.exe'));
+  return candidates.find((p) => fs.existsSync(p)) || null;
 }
 
-const psQuote = (s) => `'${String(s).replace(/'/g, "''")}'`;
+// How to launch a Node-based CLI script (used for in-app terminal sessions).
+function nodeLaunch(script, args, env) {
+  const node = findNode();
+  return node ? { file: node, args: [script, ...args], env } : { file: process.execPath, args: [script, ...args], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
+}
 
-// Runs a Node-based CLI script with Electron's bundled Node, so it works even
-// if Node isn't on PATH.
 function spawnNodeCli(script, args, env, opts = {}) {
+  const node = findNode();
+  if (node) return spawn(node, [script, ...args], { env, windowsHide: true, ...opts });
   return spawn(process.execPath, [script, ...args], { env: { ...env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true, ...opts });
 }
 
 function killTree(child) {
-  if (child?.pid) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {});
+  if (child?.pid) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
 }
 
 // Yields parsed JSON objects from a child's stdout (one per line).
@@ -83,4 +91,4 @@ function mcpServerEntry({ port, token, chatId }) {
 // Our tool names, as CLIs may prefix MCP tools ("mcp__modelhub__x", "modelhub__x", "mcp_modelhub_x").
 const stripMcpPrefix = (name) => String(name || '').replace(/^(mcp__modelhub__|mcp_modelhub_|modelhub__|modelhub\.)/, '');
 
-module.exports = { npmDir, openConsole, psQuote, spawnNodeCli, killTree, jsonLines, runToEnd, renderContext, buildPrompt, mcpServerEntry, stripMcpPrefix };
+module.exports = { npmDir, findNode, nodeLaunch, spawnNodeCli, killTree, jsonLines, runToEnd, renderContext, buildPrompt, mcpServerEntry, stripMcpPrefix };

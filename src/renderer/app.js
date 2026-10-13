@@ -853,6 +853,7 @@ $('#setTheme').onchange = () => setTheme($('#setTheme').value);
 $('#themeToggle').onclick = () => setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
+  requestAnimationFrame(() => typeof refreshTermThemes === 'function' && refreshTermThemes());
   $('#themeToggle use').setAttribute('href', theme === 'light' ? '#i-moon' : '#i-sun');
   $('#setTheme').value = theme;
 }
@@ -940,17 +941,19 @@ function setOllamaSignedIn(v) {
     const id = card.dataset.cli;
     card.querySelector('.signin').onclick = async () => {
       const el = card.querySelector('.acct-status');
+      let session;
       try {
-        await hub.accounts.cliLogin(id);
+        session = await startCliLogin(id);
       } catch (e) {
         el.textContent = `○ ${e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`;
         return;
       }
-      el.textContent = 'Finish signing in in the window that opened…';
-      for (let i = 0; i < 100; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const st = await hub.accounts.status();
-        if (st[id]?.loggedIn) break;
+      el.textContent = 'Finish signing in in the Terminal panel →';
+      // Check only this CLI, and not too often.
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        if ((await hub.accounts.cliStatus(id))?.loggedIn) break;
+        if (ptyState.sessions.get(session.id)?.exited !== false) break; // sign-in tab closed or finished
       }
       await refreshAccounts();
       loadModels();
@@ -1242,7 +1245,10 @@ hub.chats.onEvent((ev) => {
     case 'tool_call':
       // Show the user what the AI is working on.
       if (['web_search', 'open_url', 'read_page', 'click', 'type_text'].includes(ev.name)) openPanel('browser');
-      else if (ev.name === 'run_command') openPanel('terminal');
+      else if (ev.name === 'run_command') {
+        openPanel('terminal');
+        selectTerm('ai');
+      }
       break;
     case 'review':
       if (current) {
@@ -1643,415 +1649,163 @@ hub.terminal.onEnd(({ runId, exitCode, cwd }) => {
   $('#termCwd').textContent = cwd;
   termRuns.delete(runId);
 });
-const termHistory = [];
-let termHistIdx = 0;
-$('#termForm').onsubmit = (e) => {
-  e.preventDefault();
-  const cmd = $('#termInput').value.trim();
-  if (!cmd) return;
-  if (cmd === 'cls' || cmd === 'clear') {
-    $('#termLog').innerHTML = '';
-  } else {
-    hub.terminal.run(cmd);
-  }
-  termHistory.push(cmd);
-  termHistIdx = termHistory.length;
-  $('#termInput').value = '';
-};
-$('#termInput').addEventListener('keydown', (e) => {
-  if (e.key === 'ArrowUp' && termHistIdx > 0) $('#termInput').value = termHistory[--termHistIdx];
-  else if (e.key === 'ArrowDown' && termHistIdx < termHistory.length) $('#termInput').value = termHistory[++termHistIdx] || '';
-  else return;
-  e.preventDefault();
-});
+// ---------------- interactive terminal (xterm.js + ConPTY) ----------------
 
-// ---------------- git ----------------
+const ptyState = { sessions: new Map(), active: 'ai', opened: false };
 
-const gitState = { repo: '', repos: [], info: null, selected: null, sub: 'changes', timer: null, busy: false, newBranch: false };
-const STATUS_NAMES = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', U: 'conflict', '?': 'new file', T: 'type changed' };
-
-function gitVisible() {
-  return state.panelOpen && state.panelTab === 'git' && !document.hidden;
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
-
-async function gitActivate() {
-  await gitLoadRepos();
-  await gitRefresh();
-  clearInterval(gitState.timer);
-  gitState.timer = setInterval(() => {
-    if (!gitVisible()) return clearInterval(gitState.timer);
-    if (!gitState.busy) gitRefresh(true);
-  }, 4000);
-}
-
-async function gitLoadRepos() {
-  const { repos, active } = await hub.git.repos();
-  gitState.repos = repos;
-  gitState.repo = repos.some((r) => r.path === active) ? active : repos[0]?.path || '';
-  $('#gitRepo').innerHTML = repos.length
-    ? repos.map((r) => `<option value="${esc(r.path)}" title="${esc(r.path)}">${esc(r.name)}${r.exists ? '' : ' (missing)'}</option>`).join('')
-    : '<option value="">No repositories</option>';
-  $('#gitRepo').value = gitState.repo;
-  $('#gitRepoList').innerHTML = repos.length
-    ? repos.map((r) => `<li><span class="repo-name">${esc(r.name)}</span><span class="muted small path">${esc(r.path)}</span><button class="icon-btn" data-remove="${esc(r.path)}" title="Stop tracking (files are not touched)">${icon('x')}</button></li>`).join('')
-    : '<li class="muted">Not tracking any repositories yet.</li>';
-  $('#gitRepoList').querySelectorAll('[data-remove]').forEach((b) => (b.onclick = async () => {
-    await hub.git.remove(b.dataset.remove);
-    await gitLoadRepos();
-    gitRefresh();
-  }));
-  const none = !repos.length;
-  $('#gitMain').hidden = none;
-  if (none) $('#gitManage').hidden = false;
-  for (const id of ['#gitFetch', '#gitPull', '#gitPush', '#gitBranch']) $(id).disabled = none;
-}
-
-function setGitProgress(text, kind = '') {
-  const el = $('#gitProgress');
-  el.hidden = !text;
-  el.className = `git-progress ${kind}`;
-  el.textContent = text || '';
-}
-
-async function gitRun(label, fn, { refresh = true } = {}) {
-  if (gitState.busy) return;
-  gitState.busy = true;
-  setGitProgress(`${label}…`);
-  try {
-    const out = await fn();
-    setGitProgress(`${label}: done`, 'ok');
-    setTimeout(() => !gitState.busy && $('#gitProgress').classList.contains('ok') && setGitProgress(''), 2500);
-    return out;
-  } catch (e) {
-    setGitProgress(`${label} failed: ${e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 'err');
-    throw e;
-  } finally {
-    gitState.busy = false;
-    if (refresh) gitRefresh(true);
-  }
-}
-hub.git.onProgress(({ repo, line }) => {
-  if ((repo === gitState.repo || !gitState.repo) && gitState.busy) setGitProgress(line);
-});
-
-async function gitRefresh(quiet) {
-  if (!gitState.repo) {
-    $('#gitTabCount').hidden = true;
-    return;
-  }
-  let info;
-  try {
-    info = await hub.git.info(gitState.repo);
-  } catch (e) {
-    if (!quiet) setGitProgress(`Can't read repository: ${e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`, 'err');
-    return;
-  }
-  const changed = JSON.stringify(info) !== JSON.stringify(gitState.info);
-  gitState.info = info;
-  const count = info.files.length;
-  $('#gitTabCount').hidden = !count;
-  $('#gitTabCount').textContent = count;
-  $('#gitCount').textContent = count || '';
-  $('#gitAhead').textContent = info.ahead ? ` ${info.ahead}` : '';
-  $('#gitBehind').textContent = info.behind ? ` ${info.behind}` : '';
-  $('#gitPush').classList.toggle('primary', info.ahead > 0);
-  $('#gitPush').title = info.upstream ? `Push to ${info.upstream}` : info.remotes.length ? 'Push and set upstream (origin)' : 'No remote configured';
-  $('#gitPull').title = info.upstream ? `Pull from ${info.upstream}` : 'No upstream branch';
-  if (changed || !quiet) {
-    renderGitFiles();
-    if (!gitState.newBranch) renderGitBranches();
-  }
-  if (gitState.selected) {
-    const still = info.files.find((f) => f.path === gitState.selected.path && (gitState.selected.staged ? f.staged : f.unstaged));
-    if (still) {
-      if (changed || !quiet) showGitDiff(gitState.selected, true);
-    } else {
-      gitState.selected = null;
-      $('#gitDiff').innerHTML = '<div class="muted center">Select a file to see its changes</div>';
-    }
-  }
-  if (gitState.sub === 'history' && !quiet) renderGitLog();
-}
-
-function fileRow(f, staged) {
-  const code = staged ? f.x : f.untracked ? '?' : f.y;
-  const letter = code === '?' ? 'U' : f.conflict ? '!' : code;
-  const name = f.path.split('/').pop();
-  const dir = f.path.slice(0, -name.length);
-  const li = document.createElement('li');
-  li.className = 'git-file' + (gitState.selected?.path === f.path && !!gitState.selected.staged === staged ? ' active' : '');
-  li.title = `${f.path} — ${STATUS_NAMES[code] || code}${f.from ? ` (from ${f.from})` : ''}`;
-  li.innerHTML = `
-    <span class="st st-${code === '?' ? 'new' : f.conflict ? 'conflict' : letter}">${esc(letter)}</span>
-    <span class="fname">${esc(name)}</span><span class="fdir">${esc(dir)}</span>
-    <span class="factions">
-      ${staged ? `<button class="icon-btn" data-a="unstage" title="Unstage">${icon('undo')}</button>`
-        : `<button class="icon-btn" data-a="discard" title="Discard changes">${icon('trash')}</button><button class="icon-btn" data-a="stage" title="Stage">${icon('plus')}</button>`}
-    </span>`;
-  li.onclick = (e) => {
-    if (e.target.closest('button')) return;
-    gitState.selected = { path: f.path, staged, untracked: !!f.untracked };
-    $('#gitStaged').querySelectorAll('.active').forEach((x) => x.classList.remove('active'));
-    $('#gitUnstaged').querySelectorAll('.active').forEach((x) => x.classList.remove('active'));
-    li.classList.add('active');
-    showGitDiff(gitState.selected);
+function termTheme() {
+  const dark = document.documentElement.dataset.theme !== 'light';
+  const base = {
+    background: cssVar('--term-bg'),
+    foreground: cssVar('--term-text'),
+    cursor: cssVar('--accent'),
+    selectionBackground: dark ? '#3a4a6a' : '#b6cdf5',
   };
-  li.querySelector('[data-a=stage]')?.addEventListener('click', () => gitRun('Stage', () => hub.git.stage(gitState.repo, [f.path])));
-  li.querySelector('[data-a=unstage]')?.addEventListener('click', () => gitRun('Unstage', () => hub.git.unstage(gitState.repo, [f.path])));
-  const discard = li.querySelector('[data-a=discard]');
-  discard?.addEventListener('click', () => {
-    if (!discard.classList.contains('confirm')) {
-      discard.classList.add('confirm');
-      discard.title = f.untracked ? 'Click again to DELETE this new file' : 'Click again to throw away your changes';
-      setTimeout(() => discard.classList.remove('confirm'), 3000);
-      return;
-    }
-    gitRun('Discard', () => hub.git.discard(gitState.repo, [f.path]));
+  // Light mode: darker ANSI colors so PowerShell's yellow/cyan stay readable on white.
+  return dark
+    ? base
+    : {
+        ...base,
+        black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#8a5a00', blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+        brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37', brightYellow: '#7d4e00', brightBlue: '#218bff', brightMagenta: '#a475f9', brightCyan: '#1f6f80', brightWhite: '#8c959f',
+      };
+}
+
+function termSize() {
+  const r = $('#termXterms').getBoundingClientRect();
+  return { cols: Math.max(40, Math.floor((r.width - 16) / 7.8)), rows: Math.max(10, Math.floor((r.height - 16) / 17)) };
+}
+
+function selectTerm(id) {
+  ptyState.active = id;
+  document.querySelectorAll('#termTabs .term-tab').forEach((t) => t.classList.toggle('active', t.dataset.session === id));
+  $('#termAi').hidden = id !== 'ai';
+  $('#termXterms').hidden = id === 'ai';
+  for (const [sid, s] of ptyState.sessions) s.el.hidden = sid !== id;
+  const s = ptyState.sessions.get(id);
+  if (s) {
+    requestAnimationFrame(() => {
+      try {
+        s.fit.fit();
+      } catch {}
+      s.term.focus();
+    });
+  }
+}
+
+function attachSession(info, hint) {
+  const el = document.createElement('div');
+  el.className = 'xterm-host';
+  $('#termXterms').appendChild(el);
+  const term = new Terminal({
+    fontFamily: "'Cascadia Code', Consolas, monospace",
+    fontSize: 13,
+    cursorBlink: true,
+    scrollback: 5000,
+    theme: termTheme(),
   });
-  return li;
-}
-
-function renderGitFiles() {
-  const info = gitState.info;
-  const staged = info.files.filter((f) => f.staged);
-  const unstaged = info.files.filter((f) => f.unstaged);
-  $('#gitStaged').innerHTML = '';
-  $('#gitUnstaged').innerHTML = '';
-  staged.forEach((f) => $('#gitStaged').appendChild(fileRow(f, true)));
-  unstaged.forEach((f) => $('#gitUnstaged').appendChild(fileRow(f, false)));
-  $('#gitStagedGroup').hidden = !staged.length;
-  if (!unstaged.length) $('#gitUnstaged').innerHTML = `<li class="muted small empty">${staged.length ? 'Nothing else changed' : 'Working tree clean'}</li>`;
-  $('#gitStageAll').hidden = !unstaged.length;
-  $('#gitCommit').disabled = !staged.length && !$('#gitAmend').checked;
-  $('#gitCommitPush').disabled = $('#gitCommit').disabled;
-}
-
-async function renderGitBranches() {
-  let branches = [];
-  try {
-    branches = await hub.git.branches(gitState.repo);
-  } catch {}
-  const local = branches.filter((b) => !b.remote);
-  const remote = branches.filter((b) => b.remote && !local.some((l) => b.name.endsWith('/' + l.name)));
-  const current = local.find((b) => b.current)?.name || gitState.info?.branch || '';
-  $('#gitBranch').innerHTML =
-    (gitState.info?.detached ? '<option value="">(detached HEAD)</option>' : '') +
-    local.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('') +
-    (remote.length ? `<optgroup label="Remote">${remote.map((b) => `<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('')}</optgroup>` : '') +
-    '<option value="__new__">+ New branch…</option>';
-  $('#gitBranch').value = gitState.info?.detached ? '' : current;
-}
-
-// Unified diff -> rows with old/new line numbers.
-function renderDiff(text, el) {
-  if (!text || !text.trim()) {
-    el.innerHTML = '<div class="muted center">No textual changes</div>';
-    return;
-  }
-  const lines = text.replace(/\r/g, '').replace(/\n$/, '').split('\n');
-  let oldN = 0;
-  let newN = 0;
-  const rows = [];
-  for (const line of lines.slice(0, 6000)) {
-    let cls = 'ctx';
-    let a = '';
-    let b = '';
-    const h = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-    if (h) {
-      oldN = +h[1];
-      newN = +h[2];
-      cls = 'hunk';
-    } else if (/^(diff |index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode|Binary)/.test(line)) cls = 'meta';
-    else if (line.startsWith('+')) {
-      cls = 'add';
-      b = newN++;
-    } else if (line.startsWith('-')) {
-      cls = 'del';
-      a = oldN++;
-    } else if (line.startsWith('\\')) cls = 'meta';
-    else {
-      a = oldN++;
-      b = newN++;
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(el);
+  term.onData((d) => hub.pty.write(info.id, d));
+  term.onResize(({ cols, rows }) => hub.pty.resize(info.id, cols, rows));
+  // Ctrl+C copies when text is selected (otherwise it interrupts); Ctrl+V pastes.
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown' || !e.ctrlKey) return true;
+    if (e.key === 'c' && term.hasSelection()) {
+      navigator.clipboard.writeText(term.getSelection());
+      term.clearSelection();
+      return false;
     }
-    rows.push(`<div class="dl ${cls}"><span class="ln">${a}</span><span class="ln">${b}</span><span class="code">${esc(line) || ' '}</span></div>`);
-  }
-  if (lines.length > 6000) rows.push(`<div class="dl meta"><span class="ln"></span><span class="ln"></span><span class="code">… ${lines.length - 6000} more lines</span></div>`);
-  el.innerHTML = `<div class="diff">${rows.join('')}</div>`;
-}
+    if (e.key === 'v') {
+      navigator.clipboard.readText().then((t) => t && term.paste(t));
+      return false;
+    }
+    return true;
+  });
+  if (hint) term.writeln(`\x1b[36m${hint}\x1b[0m\r\n`);
 
-async function showGitDiff(sel, keepScroll) {
-  const el = $('#gitDiff');
-  const scroll = el.scrollTop;
-  try {
-    const text = await hub.git.diff(gitState.repo, sel.path, { staged: sel.staged, untracked: sel.untracked });
-    renderDiff(text, el);
-    if (keepScroll) el.scrollTop = scroll;
-  } catch (e) {
-    el.innerHTML = `<div class="error pad">${esc(e.message)}</div>`;
-  }
-}
-
-async function renderGitLog() {
-  const log = await hub.git.log(gitState.repo).catch(() => []);
-  $('#gitLog').innerHTML = log.length
-    ? log
-        .map((c) => {
-          const refs = (c.refs || '').split(',').map((r) => r.trim().replace(/^HEAD -> /, '')).filter((r) => r && r !== 'HEAD');
-          return `<li data-hash="${esc(c.hash)}"><div class="subj">${esc(c.subject)}</div><div class="meta muted small"><code>${esc(c.short)}</code> ${esc(c.author)} · ${esc(c.when)} ${refs.map((r) => `<span class="chip ref">${esc(r)}</span>`).join('')}</div></li>`;
-        })
-        .join('')
-    : '<li class="muted small">No commits yet</li>';
-  $('#gitLog').querySelectorAll('li[data-hash]').forEach((li) => (li.onclick = async () => {
-    $('#gitLog').querySelectorAll('.active').forEach((x) => x.classList.remove('active'));
-    li.classList.add('active');
-    renderDiff(await hub.git.show(gitState.repo, li.dataset.hash), $('#gitShow'));
-  }));
-}
-
-document.querySelectorAll('.git-subtabs [data-gsub]').forEach((b) => (b.onclick = () => {
-  gitState.sub = b.dataset.gsub;
-  document.querySelectorAll('.git-subtabs [data-gsub]').forEach((x) => x.classList.toggle('active', x === b));
-  $('#git-changes').hidden = gitState.sub !== 'changes';
-  $('#git-history').hidden = gitState.sub !== 'history';
-  if (gitState.sub === 'history') renderGitLog();
-}));
-
-$('#gitRepo').onchange = async () => {
-  gitState.repo = $('#gitRepo').value;
-  gitState.selected = null;
-  gitState.info = null;
-  $('#gitDiff').innerHTML = '<div class="muted center">Select a file to see its changes</div>';
-  await hub.git.setActive(gitState.repo);
-  gitRefresh();
-};
-$('#gitBranch').onchange = async () => {
-  const name = $('#gitBranch').value;
-  if (name === '__new__') {
-    gitState.newBranch = true;
-    const wrap = document.createElement('form');
-    wrap.className = 'row new-branch';
-    wrap.innerHTML = `<input placeholder="new-branch-name" spellcheck="false" /><button class="primary">Create</button><button type="button" class="cancel">Cancel</button>`;
-    const branchSel = $('#gitBranch');
-    branchSel.after(wrap);
-    branchSel.hidden = true;
-    const sel = $('#gitBranch');
-    wrap.querySelector('input').focus();
-    wrap.querySelector('.cancel').onclick = () => {
-      wrap.remove();
-      sel.hidden = false;
-      gitState.newBranch = false;
-      renderGitBranches();
-    };
-    wrap.onsubmit = async (e) => {
-      e.preventDefault();
-      const n = wrap.querySelector('input').value.trim();
-      if (!n) return;
-      wrap.remove();
-      sel.hidden = false;
-      gitState.newBranch = false;
-      await gitRun(`Create branch ${n}`, () => hub.git.switchBranch(gitState.repo, n, true)).catch(() => {});
-      renderGitBranches();
-    };
-    return;
-  }
-  if (!name) return;
-  await gitRun(`Switch to ${name}`, () => hub.git.switchBranch(gitState.repo, name, false)).catch(() => {});
-  renderGitBranches();
-};
-
-$('#gitFetch').onclick = () => gitRun('Fetch', () => hub.git.fetch(gitState.repo)).catch(() => {});
-$('#gitPull').onclick = () => gitRun('Pull', () => hub.git.pull(gitState.repo)).catch(() => {});
-$('#gitPush').onclick = () => gitRun('Push', () => hub.git.push(gitState.repo)).catch(() => {});
-$('#gitStageAll').onclick = () => gitRun('Stage all', () => hub.git.stageAll(gitState.repo)).catch(() => {});
-$('#gitUnstageAll').onclick = () => gitRun('Unstage all', () => hub.git.unstage(gitState.repo, gitState.info.files.filter((f) => f.staged).map((f) => f.path))).catch(() => {});
-$('#gitRefresh').onclick = () => gitRefresh();
-$('#gitOpenFolder').onclick = () => gitState.repo && hub.git.openFolder(gitState.repo);
-$('#gitAmend').onchange = () => {
-  if (gitState.info) renderGitFiles();
-};
-
-async function gitCommit(andPush) {
-  const msg = $('#gitMsg').value.trim();
-  const amend = $('#gitAmend').checked;
-  if (!msg && !amend) {
-    $('#gitMsg').focus();
-    setGitProgress('Write a commit message first', 'err');
-    return;
-  }
-  try {
-    await gitRun(amend ? 'Amend commit' : 'Commit', () => hub.git.commit(gitState.repo, msg || undefined, amend));
-    $('#gitMsg').value = '';
-    $('#gitAmend').checked = false;
-    if (andPush) await gitRun('Push', () => hub.git.push(gitState.repo));
-  } catch {}
-}
-$('#gitCommit').onclick = () => gitCommit(false);
-$('#gitCommitPush').onclick = () => gitCommit(true);
-$('#gitMsg').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && e.ctrlKey) gitCommit(false);
-});
-
-// Repository management
-$('#gitManageBtn').onclick = () => ($('#gitManage').hidden = !$('#gitManage').hidden);
-$('#gitManageClose').onclick = () => ($('#gitManage').hidden = !gitState.repos.length ? false : true);
-$('#gitAddFolder').onclick = async () => {
-  const dir = await hub.git.pickFolder();
-  if (!dir) return;
-  await gitRun('Add repository', () => hub.git.add(dir), { refresh: false }).catch(() => {});
-  await gitLoadRepos();
-  gitRefresh();
-};
-$('#gitScan').onclick = async () => {
-  const n = await gitRun('Scanning workspace', () => hub.git.scan(), { refresh: false }).catch(() => null);
-  if (n !== null) setGitProgress(`Found ${n} repositor${n === 1 ? 'y' : 'ies'} in your workspace`, 'ok');
-  await gitLoadRepos();
-  gitRefresh();
-};
-$('#gitInit').onclick = async () => {
-  const dir = await hub.git.pickFolder();
-  if (!dir) return;
-  await gitRun('Create repository', () => hub.git.init(dir), { refresh: false }).catch(() => {});
-  await gitLoadRepos();
-  gitRefresh();
-};
-$('#gitCloneForm').onsubmit = async (e) => {
-  e.preventDefault();
-  const url = $('#gitCloneUrl').value.trim();
-  if (!url) return;
-  await gitRun('Clone', () => hub.git.clone(url), { refresh: false }).catch(() => {});
-  $('#gitCloneUrl').value = '';
-  await gitLoadRepos();
-  gitRefresh();
-};
-
-// When the AI changes files, refresh — and offer to track a repo it's working in.
-hub.git.onChanged(async () => {
-  if (gitVisible()) gitRefresh(true);
-  else if (gitState.repo) {
-    hub.git.info(gitState.repo).then((info) => {
-      $('#gitTabCount').hidden = !info.files.length;
-      $('#gitTabCount').textContent = info.files.length;
-    }).catch(() => {});
-  }
-  const cwd = await hub.terminal.cwd();
-  const top = await hub.git.detect(cwd).catch(() => null);
-  const box = $('#gitSuggest');
-  if (!top || top === gitState.repo) {
-    box.hidden = true;
-    return;
-  }
-  const tracked = gitState.repos.some((r) => r.path === top);
-  box.hidden = false;
-  box.innerHTML = `<span>The AI is working in <b>${esc(top.split(/[\\/]/).pop())}</b>${tracked ? '' : ", a repository you're not tracking"}.</span><button class="primary mini">${tracked ? 'Switch to it' : 'Track it'}</button><button class="icon-btn" title="Dismiss">${icon('x')}</button>`;
-  box.querySelector('.primary').onclick = async () => {
-    if (tracked) await hub.git.setActive(top);
-    else await hub.git.add(top);
-    box.hidden = true;
-    await gitLoadRepos();
-    gitRefresh();
+  const tab = document.createElement('button');
+  tab.className = `term-tab ${info.kind === 'login' ? 'login' : ''}`;
+  tab.dataset.session = info.id;
+  tab.innerHTML = `<span class="t">${esc(info.title)}</span><span class="close" title="Close">${icon('x')}</span>`;
+  tab.onclick = (e) => {
+    if (e.target.closest('.close')) closeSession(info.id);
+    else selectTerm(info.id);
   };
-  box.querySelector('.icon-btn').onclick = () => (box.hidden = true);
+  $('#termNew').before(tab);
+  ptyState.sessions.set(info.id, { term, fit, el, tab, info, exited: false });
+  selectTerm(info.id);
+}
+
+function closeSession(id) {
+  const s = ptyState.sessions.get(id);
+  if (!s) return;
+  if (!s.exited) hub.pty.kill(id);
+  s.term.dispose();
+  s.el.remove();
+  s.tab.remove();
+  ptyState.sessions.delete(id);
+  if (ptyState.active === id) selectTerm([...ptyState.sessions.keys()].pop() || 'ai');
+}
+
+async function newShell() {
+  $('#termXterms').hidden = false; // so it can be measured
+  const info = await hub.pty.create(termSize());
+  attachSession(info);
+}
+
+hub.pty.onData(({ id, data }) => ptyState.sessions.get(id)?.term.write(data));
+hub.pty.onExit(({ id, exitCode, provider }) => {
+  const s = ptyState.sessions.get(id);
+  if (s) {
+    s.exited = true;
+    s.tab.classList.add('exited');
+    s.term.writeln(`\r\n\x1b[90m[process exited${exitCode ? ` with code ${exitCode}` : ''} — close this tab with ×]\x1b[0m`);
+  }
+  if (provider) {
+    refreshAccounts();
+    loadModels();
+  }
 });
+
+new ResizeObserver(() => {
+  const s = ptyState.sessions.get(ptyState.active);
+  if (s && !$('#termXterms').hidden) {
+    try {
+      s.fit.fit();
+    } catch {}
+  }
+}).observe($('#termXterms'));
+
+$('#termNew').onclick = () => newShell();
+document.querySelector('#termTabs [data-session="ai"]').onclick = () => selectTerm('ai');
+
+function refreshTermThemes() {
+  for (const s of ptyState.sessions.values()) s.term.options.theme = termTheme();
+}
+
+// Opening the Terminal panel the first time starts a shell.
+function termActivate() {
+  refreshCwd();
+  if (!ptyState.opened) {
+    ptyState.opened = true;
+    if (!ptyState.sessions.size) newShell();
+  }
+}
+
+// Runs a CLI sign-in flow in an in-app terminal tab.
+async function startCliLogin(id) {
+  openPanel('terminal');
+  $('#termXterms').hidden = false;
+  const info = await hub.accounts.cliLogin(id, termSize());
+  ptyState.opened = true;
+  attachSession(info, info.hint);
+  return info;
+}
 
 // ---------------- right panel: browser + android ----------------
 
@@ -2075,6 +1829,7 @@ function openPanel(tab) {
   $('#tab-browser').hidden = tab !== 'browser';
   $('#tab-terminal').hidden = tab !== 'terminal';
   $('#tab-git').hidden = tab !== 'git';
+  if (tab === 'terminal') termActivate();
   if (tab === 'git') gitActivate();
   if (tab === 'terminal') refreshCwd();
   $('#tab-android').hidden = tab !== 'android';
@@ -2287,3 +2042,4 @@ document.querySelectorAll('.android-nav [data-key]').forEach((b) => (b.onclick =
 
 // Debug/automation handle (used by smoke tests).
 window.__app = { state, openChat, send, showView, openPanel, renderChat };
+window.ptyStateDebug = () => ptyState;

@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:" />
   <title>Model Hub</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -374,11 +375,15 @@
       </div>
 
       <div id="tab-terminal" class="tab-body" hidden>
-        <div id="termLog"></div>
-        <form id="termForm">
-          <span id="termCwd" class="muted"></span>
-          <div class="row"><span class="prompt">PS&gt;</span><input id="termInput" spellcheck="false" placeholder="Type a PowerShell command…" /></div>
-        </form>
+        <div id="termTabs" class="term-tabs">
+          <button class="term-tab" data-session="ai" title="Commands the AI runs"><span class="t">AI commands</span></button>
+          <button id="termNew" class="icon-btn" title="New PowerShell tab"><svg class="ic"><use href="#i-plus"/></svg></button>
+        </div>
+        <div id="termAi" class="term-pane" hidden>
+          <div id="termLog"></div>
+          <div class="term-foot"><span class="muted">AI working directory:</span> <span id="termCwd" class="muted"></span></div>
+        </div>
+        <div id="termXterms" class="term-pane"></div>
       </div>
 
       <div id="tab-git" class="tab-body" hidden>
@@ -469,6 +474,8 @@
     </aside>
     <button id="expandPanel" class="icon-btn" hidden title="Show side panel"><svg class="ic"><use href="#i-chev-left"/></svg></button>
   </div>
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="app.js" type="module"></script>
 </body>
 </html>

@@ -11,6 +11,7 @@ const { ollamaAccount, hfAccount } = require('./accounts');
 const { aiPick } = require('./recommend');
 const gitOps = require('./git');
 const setup = require('./setup');
+const ptys = require('./pty');
 const android = require('./android');
 const secrets = require('./secrets');
 const { providers, parse, listAll } = require('./providers');
@@ -371,9 +372,16 @@ function registerIpc() {
   });
   ipcMain.handle('accounts:ollamaSignout', () => ollamaAccount.signout());
   const CLI_PROVIDERS = ['claudecode', 'codexcli', 'geminicli'];
-  ipcMain.handle('accounts:cliLogin', (_e, id) => {
+  // Sign-in runs in an in-app terminal session; returns that session.
+  ipcMain.handle('accounts:cliLogin', (_e, id, size) => {
     if (!CLI_PROVIDERS.includes(id)) throw new Error('Unknown CLI');
-    return providers[id].login();
+    const spec = providers[id].login();
+    return { ...ptys.create(spec, (ch, p) => win?.webContents.send(ch, p), size), hint: spec.hint };
+  });
+  ipcMain.handle('accounts:cliStatus', (_e, id) => {
+    if (!CLI_PROVIDERS.includes(id)) throw new Error('Unknown CLI');
+    providers[id].forget();
+    return providers[id].status();
   });
   ipcMain.handle('accounts:cliLogout', (_e, id) => {
     if (!CLI_PROVIDERS.includes(id)) throw new Error('Unknown CLI');
@@ -569,6 +577,14 @@ function registerIpc() {
     return r.canceled ? null : r.filePaths[0];
   });
 
+  // Interactive terminal sessions (real shell via ConPTY)
+  ipcMain.handle('pty:create', (_e, size) =>
+    ptys.create({ title: 'PowerShell', kind: 'shell', cwd: terminal.workingDir }, (ch, p) => win?.webContents.send(ch, p), size)
+  );
+  ipcMain.on('pty:write', (_e, id, data) => ptys.write(id, data));
+  ipcMain.on('pty:resize', (_e, id, cols, rows) => ptys.resize(id, cols, rows));
+  ipcMain.handle('pty:kill', (_e, id) => ptys.kill(id));
+
   // Terminal (user-typed commands run without approval: the user is the one asking)
   ipcMain.handle('terminal:run', (_e, command) => terminal.run(command, { source: 'user' }));
   ipcMain.handle('terminal:kill', (_e, runId) => terminal.kill(runId));
@@ -625,5 +641,6 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   android.shutdown();
   terminal?.killAll();
+  ptys.killAll();
   app.quit();
 });

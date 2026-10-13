@@ -7,14 +7,13 @@
 const { app } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { npmDir, openConsole, psQuote, spawnNodeCli, killTree, jsonLines, runToEnd, buildPrompt, mcpServerEntry, stripMcpPrefix } = require('./cli-common');
+const { npmDir, nodeLaunch, spawnNodeCli, killTree, jsonLines, runToEnd, buildPrompt, mcpServerEntry, stripMcpPrefix } = require('./cli-common');
 
 const home = () => path.join(app.getPath('userData'), 'codex');
 const script = () => {
   const p = path.join(npmDir(), 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
   return fs.existsSync(p) ? p : null;
 };
-const cmdShim = () => path.join(npmDir(), 'codex.cmd');
 
 function env() {
   const e = { ...process.env, CODEX_HOME: home() };
@@ -39,10 +38,10 @@ module.exports = {
   async status() {
     if (!script()) return (statusCache = { connected: false, installed: false, loggedIn: false });
     fs.mkdirSync(home(), { recursive: true });
-    const r = await runToEnd(spawnNodeCli(script(), ['login', 'status'], env()));
-    const text = `${r.out}\n${r.err}`;
-    const loggedIn = r.code === 0 && /logged in/i.test(text) && !/not logged in/i.test(text);
-    statusCache = { installed: true, loggedIn, connected: loggedIn, method: /chatgpt/i.test(text) ? 'chatgpt' : /api key/i.test(text) ? 'api key' : undefined };
+    // Codex stores its sign-in in CODEX_HOME/auth.json. Only check that the file
+    // exists (never read it); this avoids starting Codex just to ask.
+    const loggedIn = fs.existsSync(path.join(home(), 'auth.json'));
+    statusCache = { installed: true, loggedIn, connected: loggedIn };
     return statusCache;
   },
 
@@ -68,11 +67,12 @@ module.exports = {
     statusCache = null;
   },
 
+  // Codex's own sign-in flow, run in an in-app terminal session (returns a launch spec).
   login() {
-    if (!script()) throw new Error('Codex CLI is not installed (npm i -g @openai/codex).');
+    if (!script()) throw new Error('Codex CLI is not installed. Install it from Settings → Check dependencies.');
     fs.mkdirSync(home(), { recursive: true });
     statusCache = null;
-    openConsole('Sign in to Codex (Model Hub)', `& ${psQuote(cmdShim())} login`, env());
+    return { ...nodeLaunch(script(), ['login'], env()), title: 'Sign in: Codex', kind: 'login', provider: 'codexcli' };
   },
 
   async logout() {

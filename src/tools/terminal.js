@@ -85,7 +85,7 @@ class Terminal {
 
   kill(runId) {
     const child = this.running.get(runId);
-    if (child) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], () => {});
+    if (child) execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
   }
 
   killAll() {
