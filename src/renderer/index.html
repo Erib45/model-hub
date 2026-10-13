@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:" />
+  <title>Model Hub</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Icon sprite (stroke icons, 24x24) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-logo" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="m3 7 9 5 9-5M12 12v10"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+      <symbol id="i-library" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></symbol>
+      <symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36z"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+      <symbol id="i-moon" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9z"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-6-6-6M12 19h8"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M6 9v6M18 9a9 9 0 0 1-9 9"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></symbol>
+      <symbol id="i-left" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7"/></symbol>
+      <symbol id="i-right" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></symbol>
+      <symbol id="i-chev-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+      <symbol id="i-chev-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></symbol>
+      <symbol id="i-tool" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94z"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+      <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+      <symbol id="i-compress" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+    </defs>
+  </svg>
+
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand"><svg class="ic logo"><use href="#i-logo"/></svg>Model Hub</div>
+      <button id="newChatBtn" class="new-chat"><svg class="ic"><use href="#i-plus"/></svg>New chat</button>
+      <div class="section-label">Chats</div>
+      <ul id="chatList"></ul>
+
+      <nav class="sidebar-nav">
+        <button data-view="library" class="nav-btn"><svg class="ic"><use href="#i-library"/></svg>Library</button>
+        <button data-view="discover" class="nav-btn"><svg class="ic"><use href="#i-compass"/></svg>Discover <span id="dlBadge" class="badge" hidden></span></button>
+        <button data-view="settings" class="nav-btn"><svg class="ic"><use href="#i-settings"/></svg>Settings</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="ollamaStatus" class="status"></div>
+        <button id="themeToggle" class="icon-btn" title="Toggle light / dark mode"><svg class="ic"><use href="#i-sun"/></svg></button>
+      </div>
+    </aside>
+
+    <main id="main">
+      <!-- Chat -->
+      <section id="view-chat" class="view">
+        <header class="chat-header">
+          <input id="chatTitle" class="title-input" spellcheck="false" placeholder="New chat" />
+          <div class="model-picker">
+            <select id="modelSelect" title="Model — switch any time; the conversation carries over"></select>
+            <label class="pill" title="Let the model use the web browser, terminal and files">
+              <input type="checkbox" id="toolsToggle" checked /><svg class="ic"><use href="#i-tool"/></svg>Tools
+            </label>
+            <label class="pill select-pill" title="When may the AI run commands / write files without asking?">
+              <svg class="ic"><use href="#i-shield"/></svg>
+              <select id="permMode">
+                <option value="ask">Ask every time</option>
+                <option value="auto">Auto (safe actions)</option>
+                <option value="full">Full auto</option>
+              </select>
+            </label>
+            <span id="ctxMeter" class="meter" hidden></span>
+            <button id="compactBtn" class="pill-btn" title="Summarize and trim this chat"><svg class="ic"><use href="#i-compress"/></svg>Compact</button>
+          </div>
+        </header>
+        <div id="modelHint" class="model-hint"></div>
+        <div id="messages"></div>
+        <div id="compactPane" class="compact-pane" hidden>
+          <div class="compact-head">
+            <div>
+              <h2>Compact this chat</h2>
+              <p class="muted small" id="compactInfo"></p>
+            </div>
+            <span class="spacer"></span>
+            <button id="compactClose" class="icon-btn" title="Close"><svg class="ic"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="compact-setup">
+            <label>Model that reads the chat <select id="compactModel"></select></label>
+            <button id="compactAnalyze" class="primary"><svg class="ic"><use href="#i-sparkle"/></svg>Analyze</button>
+          </div>
+          <p class="muted small" id="compactModelNote"></p>
+          <div id="compactStatus" class="muted"></div>
+          <div id="compactSections"></div>
+          <div class="compact-foot" id="compactFoot" hidden>
+            <span id="compactResult"></span>
+            <span class="spacer"></span>
+            <button id="compactCancel">Cancel</button>
+            <button id="compactApply" class="primary">Apply</button>
+          </div>
+        </div>
+        <form id="composer">
+          <div class="composer-box">
+            <textarea id="input" rows="2" placeholder="Message…  (Enter to send · Shift+Enter for a new line)"></textarea>
+            <button type="submit" id="sendBtn" class="send-btn" title="Send"><svg class="ic"><use href="#i-send"/></svg></button>
+            <button type="button" id="stopBtn" class="send-btn stop" title="Stop" hidden><svg class="ic"><use href="#i-stop"/></svg></button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Library -->
+      <section id="view-library" class="view page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Library</h1>
+            <p class="muted">Models on this PC. Click a description to edit what the model is good at.</p>
+          </div>
+          <button id="gotoDiscover" class="primary"><svg class="ic"><use href="#i-compass"/></svg>Find more models</button>
+        </header>
+        <div id="installedGrid" class="grid"></div>
+        <h2>Cloud models</h2>
+        <p class="muted" id="cloudHint"></p>
+        <div id="cloudGrid" class="grid"></div>
+      </section>
+
+      <!-- Discover -->
+      <section id="view-discover" class="view page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Discover</h1>
+            <p class="muted" id="hwHint"></p>
+          </div>
+        </header>
+        <div class="subtabs">
+          <button data-sub="picks" class="active">Recommended</button>
+          <button data-sub="ollama">Ollama library</button>
+          <button data-sub="hf">Hugging Face</button>
+          <button data-sub="import">Import</button>
+        </div>
+        <div id="pulls"></div>
+
+        <div id="sub-picks" class="sub">
+          <div class="rec-bar">
+            <label>Goal
+              <select id="recGoal">
+                <option value="all">Everything</option>
+                <option value="coding">Coding &amp; development</option>
+                <option value="research">Research &amp; web tasks</option>
+                <option value="general">General chat &amp; writing</option>
+                <option value="vision">Images &amp; vision</option>
+              </select>
+            </label>
+            <button id="recRefresh" title="Fetch the latest models from ollama.com"><svg class="ic"><use href="#i-refresh"/></svg>Refresh</button>
+            <span class="spacer"></span>
+            <label>AI judge <select id="recModel"></select></label>
+            <button id="recAi" class="primary"><svg class="ic"><use href="#i-sparkle"/></svg>Let AI pick</button>
+          </div>
+          <p id="recNote" class="muted small"></p>
+          <div id="recStatus" class="muted"></div>
+          <div id="recSections"></div>
+          <details id="recFallback" hidden>
+            <summary>Hand-picked list (offline fallback)</summary>
+            <div id="catalogGrid" class="grid"></div>
+          </details>
+        </div>
+
+        <div id="sub-ollama" class="sub" hidden>
+          <form id="olForm" class="search-row">
+            <input id="olQuery" placeholder="Search the Ollama library… (e.g. coder, qwen, vision)" spellcheck="false" />
+            <select id="olCap"><option value="">All</option><option value="tools">Tools</option><option value="thinking">Thinking</option><option value="vision">Vision</option><option value="embedding">Embedding</option></select>
+            <select id="olSort"><option value="popular">Popular</option><option value="newest">Newest</option></select>
+            <button class="primary">Search</button>
+          </form>
+          <p id="olCloudNote" class="muted small"></p>
+          <div id="olResults" class="list"></div>
+          <button id="olMore" hidden>Load more</button>
+        </div>
+
+        <div id="sub-hf" class="sub" hidden>
+          <form id="hfForm" class="search-row">
+            <input id="hfQuery" placeholder="Search GGUF models on Hugging Face… (e.g. qwen coder, devstral)" spellcheck="false" />
+            <button class="primary">Search</button>
+          </form>
+          <p class="muted small">Any GGUF repo works, including fine-tunes that aren't in Ollama's library. Gated repos need a Hugging Face sign-in (Settings → Accounts).</p>
+          <div id="hfResults" class="list"></div>
+        </div>
+
+        <div id="sub-import" class="sub" hidden>
+          <div class="card import-card">
+            <h3>Import a .gguf file from disk</h3>
+            <p class="muted">For models you downloaded yourself. The file is copied into Ollama's model store, so you can delete the original afterwards.</p>
+            <div class="row"><input id="impFile" placeholder="Path to .gguf file" spellcheck="false" /><button id="impBrowse">Browse…</button></div>
+            <div class="row"><input id="impName" placeholder="Name in your library, e.g. my-model:7b-q4" spellcheck="false" /><button id="impGo" class="primary">Import</button></div>
+          </div>
+          <div class="card import-card">
+            <h3>Pull by name</h3>
+            <p class="muted">Any Ollama model name (<code>qwen3-coder:30b</code>) or Hugging Face GGUF (<code>hf.co/user/repo:Q4_K_M</code>).</p>
+            <form id="pullForm" class="row">
+              <input id="pullName" placeholder="Model name" spellcheck="false" />
+              <button class="primary">Download</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <!-- Setup -->
+      <section id="view-setup" class="view page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Set up Model Hub</h1>
+            <p class="muted">Model Hub uses a few free tools. Install what you need; everything comes from the official sources (winget / npm). You can come back here any time from Settings.</p>
+          </div>
+        </header>
+        <div class="row wrap setup-actions">
+          <button id="setupInstallRec" class="primary"><svg class="ic"><use href="#i-download"/></svg>Install everything recommended</button>
+          <button id="setupRecheck"><svg class="ic"><use href="#i-refresh"/></svg>Check again</button>
+          <span class="spacer"></span>
+          <button id="setupDone">Continue to the app</button>
+        </div>
+        <div id="setupList" class="setup-list"></div>
+        <p class="muted small">Windows may ask for permission while installing. Ollama starts automatically after it's installed. After installing a CLI, sign in under Settings → Accounts.</p>
+      </section>
+
+      <!-- Settings -->
+      <section id="view-settings" class="view page" hidden>
+        <header class="page-head"><div><h1>Settings</h1></div></header>
+        <div class="settings-wrap">
+          <h2>Accounts</h2>
+          <div class="accounts">
+            <p class="muted small cli-intro"><b>Use your own plans instead of API billing.</b> These run each company's official CLI in a separate profile for this app. You sign in through their own sign-in page; the app never sees your password or token. Usage counts toward your plan's limits. Their own tools stay on, except the ones this app provides (shell, browser, web search, writing files), so those go through the app's approvals.</p>
+            <div class="card account-cli" data-cli="claudecode">
+              <h3>Claude Code <span class="acct-status"></span></h3>
+              <p class="muted">Your Claude plan (Pro, Max, Team…) via the official Claude Code CLI.</p>
+              <div class="row"><button class="primary signin">Sign in</button><button class="signout">Sign out</button><button class="link" data-url="https://claude.com/claude-code">Get Claude Code ↗</button></div>
+              <p class="muted small cli-hint"></p>
+            </div>
+            <div class="card account-cli" data-cli="codexcli">
+              <h3>Codex <span class="acct-status"></span></h3>
+              <p class="muted">Your ChatGPT plan (Plus, Pro, Business…) via OpenAI's official Codex CLI.</p>
+              <div class="row"><button class="primary signin">Sign in</button><button class="signout">Sign out</button><button class="link" data-url="https://developers.openai.com/codex/cli">Get Codex CLI ↗</button></div>
+              <p class="muted small cli-hint"></p>
+            </div>
+            <div class="card account-cli" data-cli="geminicli">
+              <h3>Gemini CLI <span class="acct-status"></span></h3>
+              <p class="muted">Your Google account (free daily allowance, more with Google AI plans) via Google's official Gemini CLI.</p>
+              <div class="row"><button class="primary signin">Sign in</button><button class="signout">Sign out</button><button class="link" data-url="https://geminicli.com">Get Gemini CLI ↗</button></div>
+              <p class="muted small cli-hint"></p>
+            </div>
+            <div class="card account" data-provider="anthropic">
+              <h3>Claude API <span class="acct-status"></span></h3>
+              <p class="muted">API key from the Claude Console. Without one, the app uses <code>ANTHROPIC_API_KEY</code> or an <code>ant auth login</code> profile. Billed per token. To use your Claude plan instead, sign in to Claude Code above.</p>
+              <div class="row"><input type="password" class="key" placeholder="sk-ant-…" spellcheck="false" /><button class="primary save">Save</button><button class="remove">Remove</button></div>
+              <button class="link" data-url="https://console.anthropic.com/settings/keys">Get a Claude API key ↗</button>
+            </div>
+            <div class="card account" data-provider="openai">
+              <h3>OpenAI API <span class="acct-status"></span></h3>
+              <p class="muted">API key from the OpenAI platform. <code>OPENAI_API_KEY</code> also works. Billed per token. To use your ChatGPT plan instead, sign in to Codex above.</p>
+              <div class="row"><input type="password" class="key" placeholder="sk-…" spellcheck="false" /><button class="primary save">Save</button><button class="remove">Remove</button></div>
+              <button class="link" data-url="https://platform.openai.com/api-keys">Get an OpenAI API key ↗</button>
+            </div>
+            <div class="card account" data-provider="gemini">
+              <h3>Gemini API <span class="acct-status"></span></h3>
+              <p class="muted">API key from Google AI Studio (there's a free tier). <code>GEMINI_API_KEY</code> also works. To use your Google account instead, sign in to Gemini CLI above.</p>
+              <div class="row"><input type="password" class="key" placeholder="AIza…" spellcheck="false" /><button class="primary save">Save</button><button class="remove">Remove</button></div>
+              <button class="link" data-url="https://aistudio.google.com/apikey">Get a Gemini API key ↗</button>
+            </div>
+            <div class="card account-ollama">
+              <h3>Ollama.com <span class="acct-status"></span></h3>
+              <p class="muted">Links this PC's Ollama to your ollama.com account, which unlocks <b>cloud models</b>: very large models running on Ollama's servers (usage limits on the free plan; prompts leave your PC). Local models are unaffected.</p>
+              <div class="row"><button class="primary signin">Sign in with browser</button><button class="signout">Sign out</button><button class="link" data-url="https://ollama.com/settings">Manage account ↗</button></div>
+            </div>
+            <div class="card account" data-provider="huggingface">
+              <h3>Hugging Face <span class="acct-status"></span></h3>
+              <p class="muted">For <b>gated</b> repos (e.g. Llama, original Gemma) and private ones. Create a <i>read</i> token, and accept each gated model's license on its Hugging Face page.</p>
+              <div class="row"><input type="password" class="key" placeholder="hf_…" spellcheck="false" /><button class="primary save">Save</button><button class="remove">Remove</button></div>
+              <button class="link" data-url="https://huggingface.co/settings/tokens">Create a Hugging Face token ↗</button>
+              <div class="ssh-step">
+                <p class="muted"><b>So Ollama can download gated models too:</b> Ollama downloads with its own key. Add it to your Hugging Face account once (the button copies it and opens the page; paste and save).</p>
+                <button class="copy-ssh">Copy Ollama key &amp; open Hugging Face</button>
+              </div>
+            </div>
+          </div>
+          <p class="muted small">Keys and tokens are encrypted with Windows DPAPI and only sent to the service they belong to.</p>
+
+          <h2>Setup</h2>
+          <p class="muted small">Check and install the tools Model Hub uses (Ollama, Git, Node.js, the Claude Code / Codex / Gemini CLIs, Android SDK).</p>
+          <button id="openSetup"><svg class="ic"><use href="#i-download"/></svg>Check dependencies</button>
+
+          <h2>Appearance</h2>
+          <label class="field">Theme
+            <select id="setTheme"><option value="dark">Dark</option><option value="light">Light</option></select>
+          </label>
+
+          <h2>Tools &amp; permissions</h2>
+          <label class="field">Workspace folder (where the AI works by default)
+            <div class="row"><input id="setWorkspace" spellcheck="false" /><button id="pickWorkspace">Browse…</button></div>
+          </label>
+          <label class="field">Permission mode
+            <select id="setPerm">
+              <option value="ask">Ask every time: approve every command and file write</option>
+              <option value="auto">Auto: read-only commands and writes inside the workspace run on their own; anything else asks</option>
+              <option value="full">Full auto: everything runs without asking, except dangerous commands</option>
+            </select>
+            <small>Dangerous commands (recursive deletes, registry edits, force-push, piping downloads into a shell, system folders…) always ask, in every mode.</small>
+          </label>
+          <label class="field toggle-field"><span><input type="checkbox" id="setReviewer" /> AI reviewer (Auto mode)</span>
+            <small>A small local model reads each "normal" command (not read-only, not dangerous) with your request, and lets routine dev work like installs, builds and tests run without asking. Anything it isn't sure about still asks you. It runs on the CPU, so it doesn't take VRAM from your chat model.</small>
+          </label>
+          <label class="field">Reviewer model
+            <select id="setReviewerModel"></select>
+          </label>
+          <div class="field">Always-allowed command prefixes
+            <div id="allowRules" class="chips"></div>
+          </div>
+
+          <h2>Switching models &amp; cost</h2>
+          <label class="field">When a model reads work done by other models in the same chat
+            <select id="setHandoff">
+              <option value="compact">Answers only: drop their tool calls and raw tool output (cheaper)</option>
+              <option value="full">Everything: include their tool calls and full tool output</option>
+            </select>
+            <small>Example: a local model does a web search, then you switch back to Claude. With "Answers only", Claude reads the local model's answer, not every page it read. You still see everything in the chat.</small>
+          </label>
+          <label class="field">Claude prompt cache lifetime
+            <select id="setCacheTtl">
+              <option value="1h">1 hour: survives pauses and detours to other models</option>
+              <option value="5m">5 minutes: cheaper writes, expires during pauses</option>
+            </select>
+            <small>Claude re-reads the whole chat on every message; cached parts cost about a tenth of the normal price (5% on Opus 5.5). Writing to the cache costs 2× (1 hour) or 1.25× (5 minutes) for the new part of each message.</small>
+          </label>
+
+          <h2>Models</h2>
+          <label class="field">Context window for local models (tokens)
+            <input id="setCtx" type="number" min="2048" step="1024" />
+            <small>Bigger = longer memory but more VRAM. 16384 is a good default for 16 GB; MoE 30B models handle 32768.</small>
+          </label>
+          <label class="field">System prompt
+            <textarea id="setSystem" rows="6"></textarea>
+          </label>
+          <div class="row save-row"><button id="saveSettings" class="primary">Save settings</button><span id="settingsSaved" class="muted"></span></div>
+        </div>
+      </section>
+    </main>
+
+    <aside id="panel">
+      <div class="panel-tabs">
+        <button data-tab="browser" class="tab active"><svg class="ic"><use href="#i-globe"/></svg>Browser</button>
+        <button data-tab="terminal" class="tab"><svg class="ic"><use href="#i-terminal"/></svg>Terminal</button>
+        <button data-tab="git" class="tab"><svg class="ic"><use href="#i-branch"/></svg>Git <span id="gitTabCount" class="badge" hidden></span></button>
+        <button data-tab="android" class="tab"><svg class="ic"><use href="#i-phone"/></svg>Android</button>
+        <button id="collapsePanel" class="tab icon" title="Hide panel"><svg class="ic"><use href="#i-chev-right"/></svg></button>
+      </div>
+
+      <div id="tab-browser" class="tab-body">
+        <div class="browser-bar">
+          <button id="bBack" class="icon-btn" title="Back"><svg class="ic"><use href="#i-left"/></svg></button>
+          <button id="bFwd" class="icon-btn" title="Forward"><svg class="ic"><use href="#i-right"/></svg></button>
+          <button id="bReload" class="icon-btn" title="Reload"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          <input id="bUrl" spellcheck="false" />
+          <button id="bExt" class="icon-btn" title="Open in system browser"><svg class="ic"><use href="#i-external"/></svg></button>
+        </div>
+        <div id="browserHost"><div class="muted center">Loading…</div></div>
+      </div>
+
+      <div id="tab-terminal" class="tab-body" hidden>
+        <div id="termLog"></div>
+        <form id="termForm">
+          <span id="termCwd" class="muted"></span>
+          <div class="row"><span class="prompt">PS&gt;</span><input id="termInput" spellcheck="false" placeholder="Type a PowerShell command…" /></div>
+        </form>
+      </div>
+
+      <div id="tab-git" class="tab-body" hidden>
+        <div class="git-bar">
+          <select id="gitRepo" title="Repository"></select>
+          <button id="gitManageBtn" class="icon-btn" title="Add or manage repositories"><svg class="ic"><use href="#i-plus"/></svg></button>
+          <span class="git-branch" title="Branch"><svg class="ic"><use href="#i-branch"/></svg><select id="gitBranch"></select></span>
+          <span class="spacer"></span>
+          <button id="gitFetch" title="Fetch from all remotes"><svg class="ic"><use href="#i-refresh"/></svg>Fetch</button>
+          <button id="gitPull" title="Pull"><svg class="ic"><use href="#i-down"/></svg>Pull<span id="gitBehind" class="count"></span></button>
+          <button id="gitPush" title="Push"><svg class="ic"><use href="#i-up"/></svg>Push<span id="gitAhead" class="count"></span></button>
+        </div>
+        <div id="gitSuggest" class="git-suggest" hidden></div>
+        <div id="gitProgress" class="git-progress" hidden></div>
+
+        <div id="gitManage" class="git-manage" hidden>
+          <h3>Repositories</h3>
+          <ul id="gitRepoList"></ul>
+          <div class="row wrap">
+            <button id="gitAddFolder"><svg class="ic"><use href="#i-folder"/></svg>Add existing folder…</button>
+            <button id="gitScan"><svg class="ic"><use href="#i-refresh"/></svg>Find repos in workspace</button>
+            <button id="gitInit">New repository…</button>
+          </div>
+          <form id="gitCloneForm" class="row"><input id="gitCloneUrl" placeholder="Clone URL (https://github.com/user/repo.git)" spellcheck="false" /><button class="primary">Clone</button></form>
+          <p class="muted small">Clones go into your workspace folder. For private repos, Git for Windows asks you to sign in the first time.</p>
+          <button id="gitManageClose" class="link">Done</button>
+        </div>
+
+        <div id="gitMain">
+          <div class="git-subtabs">
+            <button data-gsub="changes" class="active">Changes <span id="gitCount" class="count"></span></button>
+            <button data-gsub="history">History</button>
+            <span class="spacer"></span>
+            <button id="gitOpenFolder" class="icon-btn" title="Open folder"><svg class="ic"><use href="#i-folder"/></svg></button>
+            <button id="gitRefresh" class="icon-btn" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
+          </div>
+          <div id="git-changes" class="git-body">
+            <div class="git-files">
+              <div class="git-group" id="gitStagedGroup">
+                <div class="git-group-head"><span>Staged</span><button id="gitUnstageAll" class="mini" title="Unstage all">Unstage all</button></div>
+                <ul id="gitStaged"></ul>
+              </div>
+              <div class="git-group">
+                <div class="git-group-head"><span>Changes</span><button id="gitStageAll" class="mini" title="Stage all">Stage all</button></div>
+                <ul id="gitUnstaged"></ul>
+              </div>
+              <div class="git-commit">
+                <textarea id="gitMsg" rows="2" placeholder="Commit message"></textarea>
+                <div class="row">
+                  <label class="small"><input type="checkbox" id="gitAmend" /> Amend</label>
+                  <span class="spacer"></span>
+                  <button id="gitCommit" class="primary">Commit</button>
+                  <button id="gitCommitPush">Commit &amp; push</button>
+                </div>
+              </div>
+            </div>
+            <div id="gitDiff" class="diff-view"><div class="muted center">Select a file to see its changes</div></div>
+          </div>
+          <div id="git-history" class="git-body" hidden>
+            <ul id="gitLog" class="git-log"></ul>
+            <div id="gitShow" class="diff-view"><div class="muted center">Select a commit</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-android" class="tab-body" hidden>
+        <div class="android-bar">
+          <select id="avdSelect"></select>
+          <label class="pill" title="Run without the emulator's own window — only shown here"><input type="checkbox" id="headless" checked /> In-app only</label>
+          <button id="avdStart">Boot</button>
+          <select id="deviceSelect"></select>
+          <button id="avdStop">Shut down</button>
+        </div>
+        <div id="androidStage">
+          <canvas id="androidScreen" tabindex="0"></canvas>
+          <div id="androidMsg" class="muted center"></div>
+        </div>
+        <div class="android-nav">
+          <button data-key="4" title="Back">◀</button>
+          <button data-key="3" title="Home">●</button>
+          <button data-key="187" title="Recent apps">■</button>
+          <button data-key="24" title="Volume up">Vol +</button>
+          <button data-key="25" title="Volume down">Vol −</button>
+          <button data-key="26" title="Power">Power</button>
+          <span id="fps" class="muted"></span>
+        </div>
+      </div>
+    </aside>
+    <button id="expandPanel" class="icon-btn" hidden title="Show side panel"><svg class="ic"><use href="#i-chev-left"/></svg></button>
+  </div>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

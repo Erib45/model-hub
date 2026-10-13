@@ -1,0 +1,51 @@
+{
+  "name": "model-hub",
+  "productName": "Model Hub",
+  "version": "0.1.0",
+  "description": "Desktop workspace for local and cloud AI models: model library, chat with seamless model switching, shared browser, terminal, Git panel and Android emulator",
+  "author": "Erib45",
+  "main": "src/main.js",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis",
+    "pack": "electron-builder --win dir"
+  },
+  "devDependencies": {
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0"
+  },
+  "build": {
+    "appId": "com.modelhub.desktop",
+    "productName": "Model Hub",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "src/claudecode/mcp-server.js"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Model Hub",
+      "artifactName": "Model-Hub-Setup-${version}.exe"
+    }
+  }
+}
