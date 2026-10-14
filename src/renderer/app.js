@@ -697,6 +697,7 @@ function renderRecJudges() {
     : '<option value="">(no model available)</option>';
   if (prev && judges.some((m) => m.id === prev)) sel.value = prev;
   updateRecNote();
+  $('#recAi').disabled = !judges.length;
 }
 function updateRecNote() {
   const m = modelInfo($('#recModel').value);
@@ -913,12 +914,14 @@ async function refreshAccounts() {
     const id = card.dataset.cli;
     const c = st[id] || {};
     const el = card.querySelector('.acct-status');
-    el.className = 'acct-status ' + (c.loggedIn ? 'ok' : 'off');
-    el.textContent = !c.installed ? '○ not installed' : c.loggedIn ? `● signed in${c.plan ? ` (${c.plan} plan)` : ''}` : '○ not signed in';
+    el.className = 'acct-status ' + (c.blocked ? 'bad' : c.loggedIn ? 'ok' : 'off');
+    el.textContent = !c.installed ? '○ not installed' : c.blocked ? '⚠ account not supported' : c.loggedIn ? `● signed in${c.plan ? ` (${c.plan} plan)` : ''}` : '○ not signed in';
     card.querySelector('.signin').hidden = !c.installed || c.loggedIn;
     card.querySelector('.signout').hidden = !c.loggedIn;
     card.querySelector('.cli-hint').textContent = !c.installed
       ? CLI_INSTALL[id]
+      : c.blocked
+        ? c.error
       : c.loggedIn && c.method && !['claude.ai', 'chatgpt', 'google'].includes(c.method)
         ? `Note: ${CLI_NAMES[id]} is signed in with ${c.method}, not a plan, so usage is billed to that account.`
         : '';
@@ -990,6 +993,28 @@ function setOllamaSignedIn(v) {
     };
     card.querySelector('.link').onclick = (e) => hub.accounts.open(e.target.dataset.url);
   }
+  $('.test-ssh').onclick = async (e) => {
+    const btn = e.target;
+    const out = $('.ssh-result');
+    btn.disabled = true;
+    out.className = 'muted small ssh-result';
+    out.textContent = 'Connecting to hf.co with Ollama\'s key…';
+    try {
+      const r = await hub.accounts.testHfSsh();
+      if (r.linked) {
+        out.className = 'small ssh-result ok';
+        out.textContent = `✓ Linked to Hugging Face account "${r.user}". Ollama can download gated and private models this account has access to.` +
+          (r.otherAccount ? ` Note: your saved token belongs to "${r.otherAccount}", a different account.` : '');
+      } else {
+        out.className = 'small ssh-result bad';
+        out.textContent = `✕ Not linked. ${r.error || ''}`;
+      }
+    } catch (err) {
+      out.className = 'small ssh-result bad';
+      out.textContent = `✕ ${err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`;
+    }
+    btn.disabled = false;
+  };
   $('.copy-ssh').onclick = async (e) => {
     try {
       await hub.accounts.copySshKey();

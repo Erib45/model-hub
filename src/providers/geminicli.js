@@ -20,12 +20,34 @@ const script = () => {
 
 const OVERLAPPING_TOOLS = ['run_shell_command', 'google_web_search', 'web_fetch', 'read_file', 'write_file'];
 
+// Google can refuse an account tier (e.g. free personal accounts: "This client
+// is no longer supported for Gemini Code Assist for individuals"). Remember it,
+// so Gemini CLI isn't offered until the user signs in with another account.
+const blockFile = () => path.join(dotGemini(), 'modelhub-ineligible.txt');
+const INELIGIBLE = /IneligibleTierError|no longer supported for Gemini Code Assist/i;
+function ineligibleMessage(text) {
+  const reason = (String(text).match(/reasonMessage:\s*'([^']+)'/) || String(text).match(/IneligibleTierError:\s*([^\n]+)/) || [])[1] || 'Google no longer supports Gemini CLI for this account type.';
+  return `Gemini CLI can't be used with this Google account. Google says: "${reason.trim()}" Use the Gemini API instead (Settings → Accounts → Gemini API; AI Studio has a free tier), or sign out of Gemini CLI and sign in with an eligible account.`;
+}
+function checkIneligible(text) {
+  if (!INELIGIBLE.test(String(text))) return;
+  const msg = ineligibleMessage(text);
+  try {
+    fs.writeFileSync(blockFile(), msg);
+  } catch {}
+  statusCache = null;
+  throw new Error(msg);
+}
+// CLI warnings ("256-color support…", deprecations) are noise in error messages.
+const cleanErr = (text) => String(text).split(/\r?\n/).filter((l) => l.trim() && !/^\s*Warning:|policy-engine|^\s*at /.test(l)).join(' ').slice(0, 400);
+
 function env() {
   const e = { ...process.env, GEMINI_CLI_HOME: home() };
   // API keys would take precedence over the Google sign-in.
   delete e.GEMINI_API_KEY;
   delete e.GOOGLE_API_KEY;
   delete e.ELECTRON_RUN_AS_NODE;
+  e.COLORTERM = 'truecolor';
   return e;
 }
 
@@ -66,13 +88,17 @@ module.exports = {
     if (!script()) return (statusCache = { connected: false, installed: false, loggedIn: false });
     // Signed in when the CLI has stored its Google sign-in (we only check that the file exists).
     const loggedIn = fs.existsSync(path.join(dotGemini(), 'oauth_creds.json'));
-    statusCache = { installed: true, loggedIn, connected: loggedIn, method: 'google' };
+    let blocked = null;
+    try {
+      blocked = loggedIn ? fs.readFileSync(blockFile(), 'utf8') : null;
+    } catch {}
+    statusCache = { installed: true, loggedIn, connected: loggedIn && !blocked, method: 'google', ...(blocked ? { blocked: true, error: blocked } : {}) };
     return statusCache;
   },
 
   async listModels(notes) {
     const s = statusCache || (await this.status());
-    if (!s.loggedIn) return [];
+    if (!s.loggedIn || s.blocked) return [];
     const id = 'geminicli:default';
     return [{
       id,
@@ -97,6 +123,7 @@ module.exports = {
   login() {
     if (!script()) throw new Error('Gemini CLI is not installed. Install it from Settings → Check dependencies.');
     writeSettings(null, { forLogin: true });
+    fs.rmSync(blockFile(), { force: true });
     statusCache = null;
     // Start in an empty folder: in the profile folder itself Gemini sees its own
     // settings file as project config and first asks whether to trust the folder.
@@ -123,7 +150,7 @@ module.exports = {
   async logout() {
     statusCache = null;
     // Gemini CLI has no logout command; removing its stored sign-in signs this profile out.
-    for (const f of ['oauth_creds.json', 'google_accounts.json']) fs.rmSync(path.join(dotGemini(), f), { force: true });
+    for (const f of ['oauth_creds.json', 'google_accounts.json', 'modelhub-ineligible.txt']) fs.rmSync(path.join(dotGemini(), f), { force: true });
   },
 
   async complete({ system, prompt }) {
@@ -131,11 +158,12 @@ module.exports = {
     const child = spawnNodeCli(script(), ['-p', ' ', '-o', 'json', '--skip-trust'], env(), { cwd: os.tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
     child.stdin.end(`<instructions>\n${system}\n</instructions>\n\n${prompt}`);
     const r = await runToEnd(child);
+    checkIneligible(r.err + r.out);
     let res;
     try {
       res = JSON.parse(r.out.slice(r.out.indexOf('{')));
     } catch {
-      throw new Error((r.err || r.out || 'Gemini CLI returned no output').trim().slice(0, 400));
+      throw new Error(cleanErr(r.err || r.out) || 'Gemini CLI returned no output');
     }
     if (res.error) throw new Error(`Gemini CLI: ${res.error.message || res.error}`);
     return res.response || '';
@@ -198,9 +226,10 @@ module.exports = {
     signal.removeEventListener('abort', kill);
     if (signal.aborted) throw new Error('aborted');
     result.content = text;
-    if (!result.content && failure) throw new Error(`Gemini CLI: ${failure}`.slice(0, 500));
+    checkIneligible(stderr + (failure || ''));
+    if (!result.content && failure) throw new Error(`Gemini CLI: ${cleanErr(failure)}`);
     if (!result.content && !result.sessionId) {
-      const msg = stderr.trim() || 'Gemini CLI exited without an answer.';
+      const msg = cleanErr(stderr) || 'Gemini CLI exited without an answer.';
       if (/auth|login|credential/i.test(msg)) throw new Error("Gemini CLI isn't signed in. Use Settings → Accounts → Gemini CLI.");
       throw new Error(msg.slice(0, 500));
     }

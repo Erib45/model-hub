@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('hub', {
     ollamaSignin: invoke('accounts:ollamaSignin'),
     ollamaSignout: invoke('accounts:ollamaSignout'),
     copySshKey: invoke('accounts:copySshKey'),
+    testHfSsh: invoke('accounts:testHfSsh'),
     cliLogin: invoke('accounts:cliLogin'),
     cliStatus: invoke('accounts:cliStatus'),
     cliLogout: invoke('accounts:cliLogout'),

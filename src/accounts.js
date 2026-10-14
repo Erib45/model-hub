@@ -75,6 +75,32 @@ const hfAccount = {
     }
   },
 
+  // Checks whether Ollama's SSH key is linked to a Hugging Face account, the
+  // way Hugging Face documents: `ssh -T git@hf.co` answers "Hi <user>" for a
+  // linked key and "Hi anonymous" otherwise. ssh reads the key; the app doesn't.
+  testSshKey() {
+    const keyFile = path.join(os.homedir(), '.ollama', 'id_ed25519');
+    if (!fs.existsSync(keyFile)) return Promise.resolve({ linked: false, error: "Ollama's key wasn't found. Start Ollama once to create it." });
+    const { app } = require('electron');
+    const knownHosts = path.join(app.getPath('userData'), 'hf_known_hosts'); // keeps the user's own known_hosts untouched
+    const args = ['-i', keyFile, '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', `UserKnownHostsFile=${knownHosts}`, '-o', 'ConnectTimeout=15', '-T', 'git@hf.co'];
+    return new Promise((resolve) => {
+      const child = spawn('ssh', args, { windowsHide: true });
+      let out = '';
+      child.stdout.on('data', (d) => (out += d));
+      child.stderr.on('data', (d) => (out += d));
+      const t = setTimeout(() => child.kill(), 25000);
+      child.on('error', () => resolve({ linked: false, error: "Windows' SSH client (ssh.exe) isn't available. Enable \"OpenSSH Client\" in Windows optional features." }));
+      child.on('close', () => {
+        clearTimeout(t);
+        const user = (out.match(/Hi ([^,\s]+), welcome to Hugging Face/) || [])[1];
+        if (!user) resolve({ linked: false, error: out.trim().split('\n').pop() || 'No answer from hf.co' });
+        else if (user === 'anonymous') resolve({ linked: false, user, error: "The key isn't linked to a Hugging Face account yet." });
+        else resolve({ linked: true, user });
+      });
+    });
+  },
+
   // Ollama downloads hf.co models with its own SSH identity; adding this public
   // key to the HF account lets it fetch gated and private repos.
   sshKey() {

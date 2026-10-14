@@ -414,6 +414,13 @@ function registerIpc() {
     if (!CLI_PROVIDERS.includes(id)) throw new Error('Unknown CLI');
     return providers[id].logout();
   });
+  ipcMain.handle('accounts:testHfSsh', async () => {
+    const r = await hfAccount.testSshKey();
+    // Warn if the key is linked to a different account than the saved token.
+    const st = await hfAccount.status().catch(() => ({}));
+    if (r.linked && st.name && st.name.toLowerCase() !== r.user.toLowerCase()) r.otherAccount = st.name;
+    return r;
+  });
   ipcMain.handle('accounts:copySshKey', () => {
     const key = hfAccount.sshKey();
     if (!key) throw new Error("Ollama's key wasn't found (~/.ollama/id_ed25519.pub). Start Ollama once to create it.");

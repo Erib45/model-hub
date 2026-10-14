@@ -444,3 +444,10 @@ li.empty { padding: 4px 10px; cursor: default; list-style: none; }
 .md-table { border-collapse: collapse; font-size: 12.5px; margin: 6px 0 10px; }
 .md-table th, .md-table td { border: 1px solid var(--border); padding: 3px 8px; text-align: left; vertical-align: top; }
 .md-table th { background: var(--bg3); font-weight: 600; }
+
+.ssh-result { margin: 0; }
+.ssh-result:empty { display: none; }
+.ssh-result.ok { color: var(--ok); }
+.ssh-result.bad { color: var(--danger); }
+
+.acct-status.bad { color: var(--warn); }
