@@ -5,8 +5,9 @@ const openai = require('./openai');
 const claudecode = require('./claudecode');
 const codexcli = require('./codexcli');
 const geminicli = require('./geminicli');
+const antigravity = require('./antigravity');
 
-const providers = { ollama, anthropic, gemini, openai, claudecode, codexcli, geminicli };
+const providers = { ollama, anthropic, gemini, openai, claudecode, codexcli, geminicli, antigravity };
 
 // Model ids look like "ollama:qwen3:1.7b", "anthropic:claude-opus-5-5",
 // "gemini:gemini-2.5-flash", "openai:gpt-5". Bare names (older chats) are Ollama models.
@@ -26,6 +27,7 @@ async function listAll(notes) {
     claudecode.listModels(notes).catch(() => []),
     codexcli.listModels(notes).catch(() => []),
     geminicli.listModels(notes).catch(() => []),
+    antigravity.listModels(notes).catch(() => []),
   ]);
   return lists.flat();
 }

@@ -151,12 +151,13 @@ const PROVIDER_LABEL = {
   claudecode: 'Claude Code (your plan)',
   codexcli: 'Codex (your ChatGPT plan)',
   geminicli: 'Gemini CLI (your Google account)',
+  antigravity: 'Antigravity (your Google AI plan)',
   anthropic: 'Claude API',
   openai: 'OpenAI API',
   gemini: 'Gemini API',
 };
-const PROVIDER_SUFFIX = { claudecode: ' (your Claude plan)', codexcli: ' (your ChatGPT plan)', geminicli: ' (your Google account)', anthropic: ' (Claude API)', openai: ' (OpenAI API)', gemini: ' (Gemini API)' };
-const PLAN_PROVIDERS = ['claudecode', 'codexcli', 'geminicli'];
+const PROVIDER_SUFFIX = { claudecode: ' (your Claude plan)', codexcli: ' (your ChatGPT plan)', geminicli: ' (your Google account)', antigravity: ' (your Google AI plan)', anthropic: ' (Claude API)', openai: ' (OpenAI API)', gemini: ' (Gemini API)' };
+const PLAN_PROVIDERS = ['claudecode', 'codexcli', 'geminicli', 'antigravity'];
 const groupOf = (m) => (m.cloud ? 'ollama-cloud' : m.provider);
 
 // ---------------- library ----------------
@@ -682,6 +683,7 @@ function renderRecJudges() {
   const rank = (m) =>
     m.provider === 'claudecode' ? (m.name === 'opus' ? -4 : -3)
       : m.provider === 'codexcli' ? -2
+      : m.provider === 'antigravity' ? -1.5
       : m.provider === 'geminicli' ? -1
       : m.provider === 'anthropic' ? (/opus-5-5/.test(m.name) ? 0 : 1)
       : m.provider === 'openai' ? 2
@@ -908,8 +910,8 @@ async function refreshAccounts() {
     el.title = s.error || '';
     card.querySelector('.remove').hidden = !s.hasKey;
   }
-  const CLI_NAMES = { claudecode: 'Claude Code', codexcli: 'Codex', geminicli: 'Gemini CLI' };
-  const CLI_INSTALL = { claudecode: 'Install Claude Code first, then sign in here.', codexcli: 'Install it first: npm i -g @openai/codex', geminicli: 'Install it first: npm i -g @google/gemini-cli' };
+  const CLI_NAMES = { claudecode: 'Claude Code', codexcli: 'Codex', geminicli: 'Gemini CLI', antigravity: 'Antigravity' };
+  const CLI_INSTALL = { claudecode: 'Install Claude Code first, then sign in here.', codexcli: 'Install it first: npm i -g @openai/codex', geminicli: 'Install it first: npm i -g @google/gemini-cli', antigravity: 'Install it from Settings → Check dependencies (winget: Google.AntigravityCLI).' };
   for (const card of document.querySelectorAll('.account-cli')) {
     const id = card.dataset.cli;
     const c = st[id] || {};
@@ -1094,7 +1096,40 @@ function renderModelSelect() {
   if (current && state.models.some((m) => m.id === current)) sel.value = current;
   updateModelHint();
 }
+// ---------- effort ----------
+const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORT_LABEL = { '': 'Default effort', low: 'Low effort', medium: 'Medium effort', high: 'High effort', xhigh: 'Extra-high effort', max: 'Max effort' };
+function clampEffort(effort, supported) {
+  if (!effort || !supported?.length) return '';
+  if (supported.includes(effort)) return effort;
+  const below = supported.filter((e) => EFFORT_ORDER.indexOf(e) <= EFFORT_ORDER.indexOf(effort));
+  return below.length ? below[below.length - 1] : supported[0];
+}
+// The chat keeps the level you chose; each model gets the closest level it supports.
+function renderEffort() {
+  const m = modelInfo($('#modelSelect').value);
+  const levels = m?.efforts || [];
+  const wanted = state.chat?.effort ?? state.effort ?? '';
+  const sel = $('#effortSelect');
+  sel.innerHTML = ['', ...levels].map((l) => `<option value="${l}">${EFFORT_LABEL[l]}</option>`).join('');
+  sel.value = clampEffort(wanted, levels);
+  sel.disabled = !levels.length;
+  const extra =
+    m?.provider === 'anthropic' ? ' Changing it mid-chat makes Claude re-read the chat without the prompt cache once.'
+    : m?.provider === 'ollama' && !levels.includes('medium') ? ' For this model, Low turns thinking off and High turns it on.'
+    : '';
+  $('#effortPill').title = levels.length
+    ? `How hard ${m.name} thinks before answering. Higher = better on hard problems, but slower and (for paid models) more tokens.${extra}`
+    : `${m ? m.name : 'This model'} has no effort setting.`;
+  $('#effortPill').classList.toggle('disabled', !levels.length);
+}
+$('#effortSelect').onchange = () => {
+  state.effort = $('#effortSelect').value;
+  if (state.chat) state.chat.effort = state.effort;
+};
+
 function updateModelHint() {
+  renderEffort();
   const m = modelInfo($('#modelSelect').value);
   $('#modelHint').textContent = m ? `${m.description || ''}${m.nativeTools ? '' : '  (no native tool calling — tools work through a text protocol, less reliably)'}` : '';
 }
@@ -1211,7 +1246,7 @@ async function send() {
   $('#input').value = '';
   state.busy.add(state.chat.id);
   setBusyUi();
-  hub.chats.send({ chatId: state.chat.id, model, text, useTools: $('#toolsToggle').checked });
+  hub.chats.send({ chatId: state.chat.id, model, text, useTools: $('#toolsToggle').checked, effort: state.chat.effort ?? state.effort ?? '' });
 }
 $('#composer').onsubmit = (e) => {
   e.preventDefault();
@@ -1428,7 +1463,7 @@ function openCompact() {
 
   // Models that can hold the whole transcript (+ room for the answer).
   const need = tokens + 8000;
-  const rank = (m) => ({ claudecode: -3, codexcli: -2, geminicli: -1, anthropic: 0, openai: 1, gemini: 2 })[m.provider] ?? (m.cloud ? 3 : 4);
+  const rank = (m) => ({ claudecode: -3, codexcli: -2, antigravity: -1.5, geminicli: -1, anthropic: 0, openai: 1, gemini: 2 })[m.provider] ?? (m.cloud ? 3 : 4);
   const list = state.models.filter((m) => !/embed/.test(m.name)).sort((a, b) => rank(a) - rank(b) || windowOf(b, true) - windowOf(a, true));
   const prev = localStorage.getItem('compact:model');
   $('#compactModel').innerHTML = list
@@ -2293,7 +2328,7 @@ async function refreshTraceStatus() {
       : r.error === 'not installed' ? `${name}: CLI not installed`
       : /installs on first use/.test(r.error) ? `${name}: TRACE installs on first use`
       : `${name}: TRACE not set up (${r.error})`;
-  el.textContent = [fmt('Claude Code', st.claudecode), fmt('Codex', st.codexcli)].filter(Boolean).join(' · ');
+  el.textContent = [fmt('Claude Code', st.claudecode), fmt('Codex', st.codexcli), fmt('Antigravity', st.antigravity)].filter(Boolean).join(' · ');
 }
 $('#traceUpdate').onclick = async () => {
   $('#traceStatus').textContent = 'Installing / updating TRACE…';

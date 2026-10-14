@@ -88,7 +88,7 @@ function loadChat(id) {
   const chat = readJson(chatFile(id), null);
   if (!chat) return null;
   // Older chats stored bare Ollama names and Ollama-shaped tool calls.
-  const fixId = (m) => (m && !/^(ollama|anthropic|gemini|openai|claudecode|codexcli|geminicli):/.test(m) ? `ollama:${m}` : m);
+  const fixId = (m) => (m && !/^(ollama|anthropic|gemini|openai|claudecode|codexcli|geminicli|antigravity):/.test(m) ? `ollama:${m}` : m);
   chat.model = fixId(chat.model);
   for (const m of chat.messages) {
     if (m.model) m.model = fixId(m.model);
@@ -149,7 +149,7 @@ async function ensureTrace(provider, { update = false } = {}) {
   return r;
 }
 
-async function runAgenticTurn({ chat, chatId, modelId, name, provider, text, useTools, tools, ctrl, send, runAppTool, setPending }) {
+async function runAgenticTurn({ chat, chatId, modelId, name, provider, text, useTools, tools, effort, ctrl, send, runAppTool, setPending }) {
   const settings = getSettings();
   if (!traceChecked.has(provider.id)) {
     const r = await ensureTrace(provider);
@@ -188,6 +188,7 @@ async function runAgenticTurn({ chat, chatId, modelId, name, provider, text, use
       cwd,
       bridge,
       chatId,
+      effort,
       signal: ctrl.signal,
       onText: (d) => {
         live.content += d;
@@ -217,12 +218,25 @@ async function runAgenticTurn({ chat, chatId, modelId, name, provider, text, use
     chat.agentSessions[provider.id] = { sessionId: turn.sessionId, cwd, upTo: chat.messages.length };
     saveChat(chat);
     send({ type: 'message', message: msg });
+    if (turn.notice) send({ type: 'notice', text: turn.notice });
   } finally {
     toolRunners.delete(chatId);
   }
 }
 
-async function runChat(chatId, modelId, text, useTools) {
+const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
+// Picks the closest level the model supports (never higher than asked, unless
+// even its lowest level is higher).
+function clampEffort(effort, supported) {
+  if (!effort || !supported?.length) return null;
+  if (supported.includes(effort)) return effort;
+  const want = EFFORT_ORDER.indexOf(effort);
+  const below = supported.filter((e) => EFFORT_ORDER.indexOf(e) <= want);
+  return below.length ? below[below.length - 1] : supported[0];
+}
+const modelEfforts = new Map(); // modelId -> supported levels (filled by models:list)
+
+async function runChat(chatId, modelId, text, useTools, effortWanted) {
   const chat = loadChat(chatId);
   const send = (ev) => win?.webContents.send('chat:event', { chatId, ...ev });
   const ctrl = new AbortController();
@@ -236,6 +250,8 @@ async function runChat(chatId, modelId, text, useTools) {
       chat.messages.push({ kind: 'switch', role: 'system', from: prevModel, to: modelId, content: '' });
     }
     chat.model = modelId;
+    chat.effort = effortWanted || '';
+    const effort = clampEffort(effortWanted, modelEfforts.get(modelId));
     chat.messages.push({ role: 'user', content: text });
     if (!chat.title || chat.title === 'New chat') chat.title = text.slice(0, 60);
     saveChat(chat);
@@ -271,7 +287,7 @@ async function runChat(chatId, modelId, text, useTools) {
 
     if (provider.agentic) {
       // Claude Code runs its own agent loop; it reaches our tools through MCP.
-      await runAgenticTurn({ chat, chatId, modelId, name, provider, text, useTools, tools, ctrl, send, runAppTool, setPending: (p) => (pending = p) });
+      await runAgenticTurn({ chat, chatId, modelId, name, provider, text, useTools, tools, effort, ctrl, send, runAppTool, setPending: (p) => (pending = p) });
       send({ type: 'done' });
       return;
     }
@@ -292,6 +308,7 @@ async function runChat(chatId, modelId, text, useTools) {
         messages: settings.handoff === 'full' ? history : handBack(history, modelId),
         tools,
         settings,
+        effort,
         signal: ctrl.signal,
         onText: (d) => {
           pending.content += d;
@@ -366,14 +383,15 @@ function registerIpc() {
 
   // Accounts
   ipcMain.handle('accounts:status', async () => {
-    const [a, g, oa, o, h, cc, cx, gc] = await Promise.all([
+    const [a, g, oa, o, h, cc, cx, gc, ag] = await Promise.all([
       anthropic.status(), gemini.status(), openai.status(), ollamaAccount.status(), hfAccount.status(),
-      providers.claudecode.status(), providers.codexcli.status(), providers.geminicli.status(),
+      providers.claudecode.status(), providers.codexcli.status(), providers.geminicli.status(), providers.antigravity.status(),
     ]);
     return {
       claudecode: cc,
       codexcli: cx,
       geminicli: gc,
+      antigravity: ag,
       anthropic: { ...a, hasKey: secrets.has('anthropic') },
       gemini: { ...g, hasKey: secrets.has('gemini') },
       openai: { ...oa, hasKey: secrets.has('openai') },
@@ -389,7 +407,7 @@ function registerIpc() {
     return providers[provider].status();
   });
   ipcMain.handle('accounts:open', (_e, url) => {
-    if (/^https:\/\/(console\.anthropic\.com|platform\.claude\.com|claude\.com|developers\.openai\.com|github\.com|geminicli\.com|aistudio\.google\.com|platform\.openai\.com|huggingface\.co|ollama\.com)\//.test(url)) shell.openExternal(url);
+    if (/^https:\/\/(console\.anthropic\.com|platform\.claude\.com|claude\.com|developers\.openai\.com|github\.com|geminicli\.com|antigravity\.google|aistudio\.google\.com|platform\.openai\.com|huggingface\.co|ollama\.com)\//.test(url)) shell.openExternal(url);
   });
   ipcMain.handle('accounts:ollamaSignin', async () => {
     const url = await ollamaAccount.signinUrl();
@@ -398,7 +416,7 @@ function registerIpc() {
     return url;
   });
   ipcMain.handle('accounts:ollamaSignout', () => ollamaAccount.signout());
-  const CLI_PROVIDERS = ['claudecode', 'codexcli', 'geminicli'];
+  const CLI_PROVIDERS = ['claudecode', 'codexcli', 'geminicli', 'antigravity'];
   // Sign-in runs in an in-app terminal session; returns that session.
   ipcMain.handle('accounts:cliLogin', (_e, id, size) => {
     if (!CLI_PROVIDERS.includes(id)) throw new Error('Unknown CLI');
@@ -507,7 +525,7 @@ function registerIpc() {
   // TRACE plugin for Claude Code / Codex
   ipcMain.handle('trace:status', async () => {
     const out = {};
-    for (const id of ['claudecode', 'codexcli']) {
+    for (const id of ['claudecode', 'codexcli', 'antigravity']) {
       const st = await providers[id].status().catch(() => ({}));
       out[id] = st.installed ? await providers[id].ensurePlugin({ checkOnly: true }).catch((e) => ({ ok: false, error: e.message })) : { ok: false, error: 'not installed' };
     }
@@ -515,7 +533,7 @@ function registerIpc() {
   });
   ipcMain.handle('trace:update', async () => {
     const out = {};
-    for (const id of ['claudecode', 'codexcli']) out[id] = await ensureTrace(providers[id], { update: true });
+    for (const id of ['claudecode', 'codexcli', 'antigravity']) out[id] = await ensureTrace(providers[id], { update: true });
     setSettings({ traceUpdatedAt: Date.now() });
     return out;
   });
@@ -532,7 +550,11 @@ function registerIpc() {
   ipcMain.handle('recommend:ai', (_e, req) => aiPick(req));
 
   // Library
-  ipcMain.handle('models:list', () => listAll(readJson(notesFile(), {})));
+  ipcMain.handle('models:list', async () => {
+    const list = await listAll(readJson(notesFile(), {}));
+    for (const m of list) modelEfforts.set(m.id, m.efforts || []);
+    return list;
+  });
   ipcMain.handle('models:catalog', () => catalog.CATALOG);
   ipcMain.handle('models:setNote', (_e, id, text) => {
     const notes = readJson(notesFile(), {});
@@ -599,8 +621,8 @@ function registerIpc() {
     chat.title = title;
     saveChat(chat);
   });
-  ipcMain.handle('chat:send', (_e, { chatId, model, text, useTools }) => {
-    runChat(chatId, model, text, useTools); // streams via chat:event
+  ipcMain.handle('chat:send', (_e, { chatId, model, text, useTools, effort }) => {
+    runChat(chatId, model, text, useTools, effort); // streams via chat:event
   });
   ipcMain.handle('chat:stop', (_e, chatId) => active.get(chatId)?.abort());
   ipcMain.handle('chat:compactAnalyze', (_e, chatId, modelId) => compact.analyze(loadChat(chatId), modelId, getSettings()));
@@ -701,7 +723,7 @@ app.whenReady().then(async () => {
   const s = getSettings();
   if (s.tracePlugin && Date.now() - (s.traceUpdatedAt || 0) > 24 * 3600e3) {
     setTimeout(async () => {
-      for (const id of ['claudecode', 'codexcli']) {
+      for (const id of ['claudecode', 'codexcli', 'antigravity']) {
         const st = await providers[id].status().catch(() => ({}));
         if (st.installed) await ensureTrace(providers[id], { update: true });
       }

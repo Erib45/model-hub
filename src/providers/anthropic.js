@@ -19,6 +19,14 @@ const FAMILY = [
   [/haiku/, ['fast', 'general'], 'The fastest and cheapest Claude. Good for quick questions and simple tasks.'],
 ];
 
+// Effort levels per model: 4.7+ / 5.x take low…max, 4.6 has no xhigh, older none.
+function effortsFor(model) {
+  if (/-(4-6)\b|-4-6$/.test(model)) return ['low', 'medium', 'high', 'max'];
+  if (ADAPTIVE.test(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
+  if (/opus-4-5/.test(model)) return ['low', 'medium', 'high'];
+  return [];
+}
+
 let cachedClient = null;
 let cachedKey;
 function client() {
@@ -90,6 +98,7 @@ module.exports = {
         description: notes[id] ?? fam?.[2] ?? '',
         customDescription: id in notes,
         capabilities: ['tools', 'vision', ...(ADAPTIVE.test(m.id) ? ['thinking'] : [])],
+        efforts: effortsFor(m.id),
         nativeTools: true,
         contextLength: m.max_input_tokens || null,
       };
@@ -125,7 +134,7 @@ module.exports = {
     throw new Error('Claude did not finish (too many pauses).');
   },
 
-  async chatTurn({ model, system, messages, tools, settings, signal, onText, onThinking }) {
+  async chatTurn({ model, system, messages, tools, settings, effort, signal, onText, onThinking }) {
     // Prompt caching: an explicit breakpoint on the stable system prompt, plus
     // automatic caching that moves along with the growing conversation. Both use
     // the same TTL (a longer TTL may not follow a shorter one).
@@ -141,6 +150,7 @@ module.exports = {
       params.tools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters, eager_input_streaming: true }));
     }
     if (ADAPTIVE.test(model)) params.thinking = { type: 'adaptive', display: 'summarized' };
+    if (effort && effortsFor(model).includes(effort)) params.output_config = { effort };
     if (FALLBACK.test(model)) {
       // If a safety classifier declines, the API retries on its recommended fallback model.
       params.fallbacks = 'default';

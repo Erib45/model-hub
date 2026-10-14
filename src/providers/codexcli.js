@@ -58,6 +58,7 @@ module.exports = {
       description: notes[id] ?? "OpenAI's Codex agent on your ChatGPT plan (uses Codex's default model). Counts toward your ChatGPT plan limits instead of API billing.",
       customDescription: id in notes,
       capabilities: ['tools', 'thinking'],
+      efforts: ['low', 'medium', 'high', 'xhigh'],
       nativeTools: true,
       contextLength: 200000,
     }];
@@ -124,10 +125,11 @@ module.exports = {
     return text;
   },
 
-  async chatTurn({ system, context, userText, resuming, sessionId, tools, cwd, bridge, chatId, signal, onText, onThinking, emitMessage }) {
+  async chatTurn({ system, context, userText, resuming, sessionId, tools, cwd, bridge, chatId, effort, signal, onText, onThinking, emitMessage }) {
     if (!script()) throw new Error('Codex CLI is not installed (npm i -g @openai/codex).');
     const mcp = tools && bridge ? mcpServerEntry({ ...bridge, chatId }) : null;
     const args = this.baseArgs({ cwd, mcp });
+    if (effort) args.push('-c', `model_reasoning_effort="${effort === 'max' ? 'xhigh' : effort}"`);
     if (resuming) args.push('resume', sessionId, '-');
     else args.push('-');
     const prompt = buildPrompt({

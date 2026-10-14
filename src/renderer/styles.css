@@ -451,3 +451,6 @@ li.empty { padding: 4px 10px; cursor: default; list-style: none; }
 .ssh-result.bad { color: var(--danger); }
 
 .acct-status.bad { color: var(--warn); }
+
+.pill.disabled { opacity: .5; }
+#effortSelect:disabled { cursor: default; }

@@ -88,10 +88,27 @@ const ITEMS = [
   {
     id: 'gemini',
     name: 'Gemini CLI',
-    why: 'Lets you chat with your Google account (sign in under Settings → Accounts).',
+    why: 'Google stopped serving personal accounts (incl. AI Pro) in Gemini CLI on June 18, 2026; only needed for company Code Assist licences. Use Antigravity CLI instead.',
     needs: 'node',
     detect: () => (exists(path.join(npmGlobal(), 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')) ? version(path.join(npmGlobal(), 'gemini.cmd')) : null),
     install: { npm: '@google/gemini-cli' },
+  },
+  {
+    id: 'antigravity',
+    name: 'Antigravity CLI',
+    why: 'Lets you chat on your Google AI plan (Pro/Ultra); Gemini CLI no longer serves personal accounts. Sign in under Settings → Accounts.',
+    detect: async () => {
+      const local = process.env.LOCALAPPDATA || '';
+      let exe = [path.join(local, 'Antigravity', 'agy.exe'), path.join(local, 'Microsoft', 'WinGet', 'Links', 'agy.exe'), which('agy')].find((p) => p && exists(p));
+      if (!exe) {
+        try {
+          const d = fs.readdirSync(path.join(local, 'Microsoft', 'WinGet', 'Packages')).find((x) => /^Google\.AntigravityCLI/i.test(x));
+          if (d) exe = path.join(local, 'Microsoft', 'WinGet', 'Packages', d, 'agy.exe');
+        } catch {}
+      }
+      return exe && exists(exe) ? version(exe) : null;
+    },
+    install: { cmd: 'winget', args: ['install', '--id', 'Google.AntigravityCLI', '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements'] },
   },
   {
     id: 'android',

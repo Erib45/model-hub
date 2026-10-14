@@ -113,6 +113,7 @@ module.exports = {
         description: notes[id] ?? (desc || m.description || ''),
         customDescription: id in notes,
         capabilities: ['tools', 'vision', ...(THINKING.test(name) ? ['thinking'] : [])],
+        efforts: !THINKING.test(name) ? [] : NEEDS_SIGNATURE.test(name) ? ['low', 'high'] : ['low', 'medium', 'high', 'max'],
         nativeTools: true,
         contextLength: m.inputTokenLimit || null,
       };
@@ -135,13 +136,18 @@ module.exports = {
     return (data.candidates?.[0]?.content?.parts || []).filter((p) => p.text && !p.thought).map((p) => p.text).join('');
   },
 
-  async chatTurn({ model, system, messages, tools, signal, onText, onThinking }) {
+  async chatTurn({ model, system, messages, tools, effort, signal, onText, onThinking }) {
     const body = {
       contents: toGemini(messages, model),
       systemInstruction: { parts: [{ text: system }] },
     };
     if (tools) body.tools = [{ functionDeclarations: toDeclarations(tools) }];
-    if (THINKING.test(model)) body.generationConfig = { thinkingConfig: { includeThoughts: true } };
+    if (THINKING.test(model)) {
+      const thinkingConfig = { includeThoughts: true };
+      if (effort && NEEDS_SIGNATURE.test(model)) thinkingConfig.thinkingLevel = ['low', 'medium'].includes(effort) ? 'low' : 'high'; // Gemini 3+
+      else if (effort) thinkingConfig.thinkingBudget = { low: 1024, medium: 8192, high: 16384, xhigh: 24576, max: /flash/.test(model) ? 24576 : 32768 }[effort];
+      body.generationConfig = { thinkingConfig };
+    }
 
     const res = await request(`/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
       method: 'POST',

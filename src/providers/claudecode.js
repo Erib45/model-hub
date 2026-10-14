@@ -123,6 +123,7 @@ module.exports = {
         description: notes[id] ?? desc,
         customDescription: id in notes,
         capabilities: ['tools', 'thinking'],
+        efforts: alias === 'haiku' ? [] : ['low', 'medium', 'high', 'xhigh', 'max'],
         nativeTools: true,
         contextLength: 200000,
       };
@@ -206,7 +207,7 @@ module.exports = {
    * previous Claude Code turn in this chat, or null. Intermediate steps (tool
    * calls and results) are reported through emitMessage as they happen.
    */
-  async chatTurn({ model, system, context, userText, resuming, sessionId, tools, cwd, bridge, chatId, signal, onText, onThinking, emitMessage }) {
+  async chatTurn({ model, system, context, userText, resuming, sessionId, tools, cwd, bridge, chatId, effort, signal, onText, onThinking, emitMessage }) {
     let mcpConfigPath = null;
     if (tools && bridge) {
       mcpConfigPath = path.join(configDir(), `mcp-${chatId.replace(/[^\w-]/g, '')}.json`);
@@ -227,6 +228,7 @@ ${userText}`
       : userText;
 
     const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', model];
+    if (effort && model !== 'haiku') args.push('--effort', effort);
     if (resuming) args.push('--resume', sessionId);
     args.push(
       '--append-system-prompt',

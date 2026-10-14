@@ -125,6 +125,7 @@ module.exports = {
           customDescription: id in notes,
           capabilities: d.capabilities,
           nativeTools: d.capabilities.includes('tools'),
+          efforts: !d.capabilities.includes('thinking') ? [] : /^gpt-oss/.test(m.name) ? ['low', 'medium', 'high'] : ['low', 'high'],
           contextLength: d.contextLength,
           loaded: loaded ? { vram: loaded.size_vram, total: loaded.size } : null,
         };
@@ -153,7 +154,7 @@ module.exports = {
     return (await res.json()).message?.content || '';
   },
 
-  async chatTurn({ model, system, messages, tools, settings, signal, onText, onThinking }) {
+  async chatTurn({ model, system, messages, tools, settings, effort, signal, onText, onThinking }) {
     // Only one big local model fits in VRAM at a time: evict the previous one.
     // Cloud models use no VRAM, so they don't evict anything.
     const isCloud = /(-|:)cloud$/.test(model);
@@ -176,6 +177,8 @@ module.exports = {
         messages: [{ role: 'system', content: sys }, ...toOllama(fitted.messages, nativeTools)],
         tools: nativeTools ? tools.map((t) => ({ type: 'function', function: t })) : undefined,
         options: isCloud ? {} : { num_ctx: numCtx },
+        // Effort: gpt-oss takes low/medium/high; other thinking models switch thinking off (low) or on.
+        ...(effort && info.capabilities.includes('thinking') ? { think: /^gpt-oss/.test(model) ? (effort === 'xhigh' || effort === 'max' ? 'high' : effort) : effort !== 'low' } : {}),
       },
       (chunk) => {
         const m = chunk.message || {};

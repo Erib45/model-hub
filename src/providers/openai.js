@@ -90,6 +90,7 @@ module.exports = {
         description: notes[id] ?? desc,
         customDescription: id in notes,
         capabilities: ['tools', ...(REASONING.test(name) ? ['thinking'] : [])],
+        efforts: REASONING.test(name) ? ['low', 'medium', 'high'] : [],
         nativeTools: true,
         contextLength: null,
       };
@@ -120,12 +121,13 @@ module.exports = {
       .join('');
   },
 
-  async chatTurn({ model, system, messages, tools, signal, onText }) {
+  async chatTurn({ model, system, messages, tools, effort, signal, onText }) {
     const body = {
       model,
       messages: toOpenAI(system, messages),
       stream: true,
       stream_options: { include_usage: true },
+      ...(effort && REASONING.test(model) ? { reasoning_effort: effort } : {}),
     };
     if (tools) body.tools = tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
     const res = await request('/chat/completions', { method: 'POST', body: JSON.stringify(body), signal });

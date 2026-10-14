@@ -42,6 +42,7 @@
       <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
       <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
       <symbol id="i-compress" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
+      <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
     </defs>
   </svg>
@@ -81,6 +82,10 @@
                 <option value="auto">Auto (safe actions)</option>
                 <option value="full">Full auto</option>
               </select>
+            </label>
+            <label class="pill select-pill" id="effortPill" title="Effort: how hard the model thinks before answering">
+              <svg class="ic"><use href="#i-gauge"/></svg>
+              <select id="effortSelect"></select>
             </label>
             <span id="ctxMeter" class="meter" hidden></span>
             <button id="compactBtn" class="pill-btn" title="Summarize and trim this chat"><svg class="ic"><use href="#i-compress"/></svg>Compact</button>
@@ -252,9 +257,15 @@
               <div class="row"><button class="primary signin">Sign in</button><button class="signout">Sign out</button><button class="link" data-url="https://developers.openai.com/codex/cli">Get Codex CLI ↗</button></div>
               <p class="muted small cli-hint"></p>
             </div>
+            <div class="card account-cli" data-cli="antigravity">
+              <h3>Antigravity <span class="acct-status"></span></h3>
+              <p class="muted">Your Google AI plan (Pro, Ultra) via Google's official Antigravity CLI, which replaced Gemini CLI for personal accounts.</p>
+              <div class="row"><button class="primary signin">Sign in</button><button class="signout">Sign out</button><button class="link" data-url="https://antigravity.google">About Antigravity ↗</button></div>
+              <p class="muted small cli-hint"></p>
+            </div>
             <div class="card account-cli" data-cli="geminicli">
               <h3>Gemini CLI <span class="acct-status"></span></h3>
-              <p class="muted">Your Google account (free daily allowance, more with Google AI plans) via Google's official Gemini CLI.</p>
+              <p class="muted">Google's older CLI. Since June 18, 2026 it no longer works with personal Google accounts (including AI Pro/Ultra); use Antigravity above. Only company Code Assist licences still work here.</p>
               <div class="row"><button class="primary signin">Sign in</button><button class="signout">Sign out</button><button class="link" data-url="https://geminicli.com">Get Gemini CLI ↗</button></div>
               <p class="muted small cli-hint"></p>
             </div>
@@ -334,8 +345,8 @@
             <select id="setFactModel"></select>
             <small>Optional: a model adds a short overview of the project at the top of each fact sheet when it's rebuilt. Local models are free; cloud models cost a little per rebuild.</small>
           </label>
-          <label class="field toggle-field"><span><input type="checkbox" id="setTrace" /> TRACE plugin for Claude Code and Codex</span>
-            <small>Keeps <a href="#" data-ext="https://github.com/axakon/TRACE">TRACE</a> (axakon/TRACE) installed and updated in the app's Claude Code and Codex profiles. Gemini CLI and all other models get TRACE's project context through AGENTS.md.</small>
+          <label class="field toggle-field"><span><input type="checkbox" id="setTrace" /> TRACE plugin for Claude Code, Codex and Antigravity</span>
+            <small>Keeps <a href="#" data-ext="https://github.com/axakon/TRACE">TRACE</a> (axakon/TRACE) installed and updated in the app's Claude Code, Codex and Antigravity profiles. All other models get TRACE's project context through AGENTS.md.</small>
           </label>
           <div class="row wrap"><span id="traceStatus" class="muted small"></span><span class="spacer"></span><button id="traceUpdate" class="mini">Install / update TRACE now</button></div>
 
