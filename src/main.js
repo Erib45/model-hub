@@ -418,7 +418,7 @@ function registerIpc() {
     const key = hfAccount.sshKey();
     if (!key) throw new Error("Ollama's key wasn't found (~/.ollama/id_ed25519.pub). Start Ollama once to create it.");
     clipboard.writeText(key);
-    shell.openExternal('https://huggingface.co/settings/keys/add');
+    shell.openExternal('https://huggingface.co/settings/keys/add?type=ssh');
     return true;
   });
 
