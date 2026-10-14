@@ -63,6 +63,24 @@ module.exports = {
     }];
   },
 
+  // TRACE plugin (github.com/axakon/TRACE) in the app's Codex profile.
+  async ensurePlugin({ update = false, checkOnly = false } = {}) {
+    if (!script()) return { ok: false, error: 'Codex CLI is not installed' };
+    fs.mkdirSync(home(), { recursive: true });
+    const run = (args) => runToEnd(spawnNodeCli(script(), args, env()));
+    const list = await run(['plugin', 'list']);
+    if (!/trace@trace\s+installed/.test(list.out + list.err)) {
+      if (checkOnly) return { ok: false, error: 'not installed yet (installs on first use)' };
+      const m = await run(['plugin', 'marketplace', 'add', 'axakon/TRACE']);
+      if (m.code !== 0 && !/already/i.test(m.out + m.err)) return { ok: false, error: (m.err || m.out).trim().slice(-300) };
+      const a = await run(['plugin', 'add', 'trace@trace']);
+      if (a.code !== 0) return { ok: false, error: (a.err || a.out).trim().slice(-300) };
+      return { ok: true, installed: true };
+    }
+    if (update) await run(['plugin', 'marketplace', 'upgrade', 'trace']);
+    return { ok: true, version: ((list.out + list.err).match(/trace@trace\s+installed[^\n]*?\s([\d.]+)\s/) || [])[1] };
+  },
+
   forget() {
     statusCache = null;
   },

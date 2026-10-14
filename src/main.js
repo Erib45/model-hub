@@ -12,6 +12,7 @@ const { aiPick } = require('./recommend');
 const gitOps = require('./git');
 const setup = require('./setup');
 const ptys = require('./pty');
+const repoKnowledgeModule = require('./repoknowledge');
 const android = require('./android');
 const secrets = require('./secrets');
 const { providers, parse, listAll } = require('./providers');
@@ -30,6 +31,11 @@ if (path.basename(app.getPath('userData')) === app.getName()) {
 
 let win;
 let browser;
+const repoKnowledge = repoKnowledgeModule.create({
+  getSettings: () => getSettings(),
+  parseModel: (id) => parse(id),
+  notify: (st) => win?.webContents.send('repo:status', st),
+});
 let terminal;
 
 // ---------- persistence ----------
@@ -63,6 +69,10 @@ const DEFAULT_SETTINGS = {
   handoff: 'compact', // compact | full: what a model sees of other models' tool work
   claudeCacheTtl: '1h', // 1h | 5m prompt-cache lifetime for Claude
   setupDone: false, // first-run dependency setup finished or skipped
+  repoKnowledge: true, // index repos into a code graph + fact sheet
+  factSheetModel: '', // model that writes the fact sheet's summary ('' = no AI summary)
+  tracePlugin: true, // keep the TRACE plugin installed for Claude Code and Codex
+  traceUpdatedAt: 0,
 };
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const getSettings = () => ({ ...DEFAULT_SETTINGS, ...readJson(settingsFile(), {}) });
@@ -110,7 +120,7 @@ function requestApproval(chatId, signal, req) {
 
 const active = new Map(); // chatId -> AbortController
 
-function systemPrompt(settings, useTools) {
+function systemPrompt(settings, useTools, extra = '') {
   let s = `${settings.systemPrompt}\nToday's date is ${new Date().toISOString().slice(0, 10)}. The user is on Windows (${os.release()}).`;
   if (useTools) {
     s +=
@@ -119,7 +129,7 @@ function systemPrompt(settings, useTools) {
       `- A PowerShell terminal (run_command) and read_file/write_file. The workspace folder is ${settings.workspaceDir}. Prefer working inside it. Some commands need the user's approval; if one is denied, don't retry it - ask the user or choose another approach.\n` +
       `Use tools when they help; answer directly when they don't.`;
   }
-  return s;
+  return s + extra;
 }
 
 // ---------- Claude Code (agentic provider) ----------
@@ -131,8 +141,21 @@ async function ensureBridge() {
   return bridgeInfo;
 }
 
+const traceChecked = new Set();
+async function ensureTrace(provider, { update = false } = {}) {
+  if (!getSettings().tracePlugin || !provider.ensurePlugin) return null;
+  const r = await provider.ensurePlugin({ update }).catch((e) => ({ ok: false, error: e.message }));
+  traceChecked.add(provider.id);
+  return r;
+}
+
 async function runAgenticTurn({ chat, chatId, modelId, name, provider, text, useTools, tools, ctrl, send, runAppTool, setPending }) {
   const settings = getSettings();
+  if (!traceChecked.has(provider.id)) {
+    const r = await ensureTrace(provider);
+    if (r && !r.ok) send({ type: 'notice', text: `Couldn't set up the TRACE plugin for this CLI: ${r.error}` });
+    else if (r?.installed) send({ type: 'notice', text: 'Installed the TRACE plugin for this CLI.' });
+  }
   // One CLI session per provider per chat, resumed while the history still matches.
   chat.agentSessions ||= {};
   const sess = chat.agentSessions[provider.id];
@@ -156,7 +179,7 @@ async function runAgenticTurn({ chat, chatId, modelId, name, provider, text, use
   try {
     const turn = await provider.chatTurn({
       model: name,
-      system: systemPrompt(settings, useTools),
+      system: systemPrompt(settings, useTools, useTools ? await repoKnowledge.promptContext(terminal.workingDir, { includeAgentsMd: provider.id === 'claudecode' ? 'unless-claude-md' : false }) : ''),
       context,
       userText: text,
       resuming,
@@ -229,6 +252,7 @@ async function runChat(chatId, modelId, text, useTools) {
         {
           browser,
           terminal,
+          repoKnowledge,
           settings: getSettings(),
           approve: (req) => requestApproval(chatId, ctrl.signal, { ...req, model: modelId }),
           userRequest: text,
@@ -252,6 +276,9 @@ async function runChat(chatId, modelId, text, useTools) {
       return;
     }
 
+    // Repo the AI works in: point it at the fact sheet / code graph, and include
+    // AGENTS.md (TRACE's project context) for models that don't read it themselves.
+    const repoCtx = useTools ? await repoKnowledge.promptContext(terminal.workingDir, { includeAgentsMd: true }) : '';
     const noticed = new Set();
     for (let round = 0; round < 30; round++) {
       const settings = getSettings();
@@ -261,7 +288,7 @@ async function runChat(chatId, modelId, text, useTools) {
       const t0 = Date.now();
       const turn = await provider.chatTurn({
         model: name,
-        system: systemPrompt(settings, useTools),
+        system: systemPrompt(settings, useTools, repoCtx),
         messages: settings.handoff === 'full' ? history : handBack(history, modelId),
         tools,
         settings,
@@ -457,9 +484,34 @@ function registerIpc() {
   ipcMain.handle('git:branches', async (_e, repo) => gitOps.branches(await gitRepo(repo)));
   ipcMain.handle('git:switch', async (_e, repo, name, create) => gitOps.switchBranch(await gitRepo(repo), name, create));
   for (const op of ['fetch', 'pull', 'push']) {
-    ipcMain.handle(`git:${op}`, async (_e, repo) => gitOps[op](await gitRepo(repo), progress(repo, op)));
+    ipcMain.handle(`git:${op}`, async (_e, repo) => {
+      const r = await gitOps[op](await gitRepo(repo), progress(repo, op));
+      if (op !== 'fetch') repoKnowledge.check(repo); // pushed or pulled: refresh the fact sheet
+      return r;
+    });
   }
   ipcMain.handle('git:openFolder', async (_e, repo) => shell.openPath(await gitRepo(repo)));
+
+  // Repo knowledge (code graph + fact sheet)
+  ipcMain.handle('repo:status', (_e, repo) => repoKnowledge.status(repo));
+  ipcMain.handle('repo:facts', (_e, repo) => repoKnowledge.facts(repo));
+  ipcMain.handle('repo:reindex', (_e, repo) => repoKnowledge.reindex(repo, 'manual'));
+
+  // TRACE plugin for Claude Code / Codex
+  ipcMain.handle('trace:status', async () => {
+    const out = {};
+    for (const id of ['claudecode', 'codexcli']) {
+      const st = await providers[id].status().catch(() => ({}));
+      out[id] = st.installed ? await providers[id].ensurePlugin({ checkOnly: true }).catch((e) => ({ ok: false, error: e.message })) : { ok: false, error: 'not installed' };
+    }
+    return out;
+  });
+  ipcMain.handle('trace:update', async () => {
+    const out = {};
+    for (const id of ['claudecode', 'codexcli']) out[id] = await ensureTrace(providers[id], { update: true });
+    setSettings({ traceUpdatedAt: Date.now() });
+    return out;
+  });
 
   // Dependency setup
   ipcMain.handle('setup:check', () => setup.check());
@@ -637,10 +689,23 @@ app.whenReady().then(async () => {
   await setup.refreshPath(); // pick up tools installed since Windows started this process
   registerIpc();
   createWindow();
+  repoKnowledge.start();
+  // Keep TRACE current for the installed CLIs (daily).
+  const s = getSettings();
+  if (s.tracePlugin && Date.now() - (s.traceUpdatedAt || 0) > 24 * 3600e3) {
+    setTimeout(async () => {
+      for (const id of ['claudecode', 'codexcli']) {
+        const st = await providers[id].status().catch(() => ({}));
+        if (st.installed) await ensureTrace(providers[id], { update: true });
+      }
+      setSettings({ traceUpdatedAt: Date.now() });
+    }, 15000);
+  }
 });
 app.on('window-all-closed', () => {
   android.shutdown();
   terminal?.killAll();
   ptys.killAll();
+  repoKnowledge.stop();
   app.quit();
 });

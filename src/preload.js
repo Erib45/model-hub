@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('hub', {
     cliLogout: invoke('accounts:cliLogout'),
   },
   recommend: { ai: invoke('recommend:ai') },
+  repo: { status: invoke('repo:status'), facts: invoke('repo:facts'), reindex: invoke('repo:reindex'), onStatus: on('repo:status') },
+  trace: { status: invoke('trace:status'), update: invoke('trace:update') },
   setup: { check: invoke('setup:check'), install: invoke('setup:install'), onProgress: on('setup:progress') },
   git: {
     repos: invoke('git:repos'),

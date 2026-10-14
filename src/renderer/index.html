@@ -325,6 +325,19 @@
             <div id="allowRules" class="chips"></div>
           </div>
 
+          <h2>Repo knowledge</h2>
+          <label class="field toggle-field"><span><input type="checkbox" id="setRepoKnowledge" /> Map repositories for the AI</span>
+            <small>Tracked repos, and any repo a model works in, get a code graph (files, layers, imports, endpoints and who calls them) and a fact sheet. Both are rebuilt after every push or pull and stored in the app's data folder, not in the repo. Models get repo_facts and code_graph tools so they don't have to read the whole codebase. See them in Git → Knowledge.</small>
+          </label>
+          <label class="field">Fact sheet summary written by
+            <select id="setFactModel"></select>
+            <small>Optional: a model adds a short overview of the project at the top of each fact sheet when it's rebuilt. Local models are free; cloud models cost a little per rebuild.</small>
+          </label>
+          <label class="field toggle-field"><span><input type="checkbox" id="setTrace" /> TRACE plugin for Claude Code and Codex</span>
+            <small>Keeps <a href="#" data-ext="https://github.com/axakon/TRACE">TRACE</a> (axakon/TRACE) installed and updated in the app's Claude Code and Codex profiles. Gemini CLI and all other models get TRACE's project context through AGENTS.md.</small>
+          </label>
+          <div class="row wrap"><span id="traceStatus" class="muted small"></span><span class="spacer"></span><button id="traceUpdate" class="mini">Install / update TRACE now</button></div>
+
           <h2>Switching models &amp; cost</h2>
           <label class="field">When a model reads work done by other models in the same chat
             <select id="setHandoff">
@@ -416,6 +429,7 @@
           <div class="git-subtabs">
             <button data-gsub="changes" class="active">Changes <span id="gitCount" class="count"></span></button>
             <button data-gsub="history">History</button>
+            <button data-gsub="knowledge" title="Code graph and fact sheet the AI uses to orient itself">Knowledge</button>
             <span class="spacer"></span>
             <button id="gitOpenFolder" class="icon-btn" title="Open folder"><svg class="ic"><use href="#i-folder"/></svg></button>
             <button id="gitRefresh" class="icon-btn" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
@@ -441,6 +455,14 @@
               </div>
             </div>
             <div id="gitDiff" class="diff-view"><div class="muted center">Select a file to see its changes</div></div>
+          </div>
+          <div id="git-knowledge" class="git-body" hidden>
+            <div class="knowledge-bar">
+              <span id="kStatus" class="muted small"></span>
+              <span class="spacer"></span>
+              <button id="kReindex" class="mini"><svg class="ic"><use href="#i-refresh"/></svg>Re-index</button>
+            </div>
+            <div id="kFacts" class="knowledge-body"></div>
           </div>
           <div id="git-history" class="git-body" hidden>
             <ul id="gitLog" class="git-log"></ul>

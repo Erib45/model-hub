@@ -48,6 +48,8 @@ function writeSettings(mcp, { forLogin = false } = {}) {
     ...current,
     security: { ...(current.security || {}), auth },
     tools: { ...(current.tools || {}), exclude: OVERLAPPING_TOOLS },
+    // TRACE convention: project context lives in AGENTS.md; let Gemini read it like GEMINI.md.
+    context: { ...(current.context || {}), fileName: ['AGENTS.md', 'GEMINI.md'] },
     mcpServers: mcp ? { modelhub: { ...mcp, trust: true } } : {},
   };
   fs.writeFileSync(file, JSON.stringify(next, null, 2));

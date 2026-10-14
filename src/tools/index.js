@@ -36,6 +36,25 @@ const TOOLS = [
     parameters: obj({ element: { type: 'integer' }, text: { type: 'string' }, submit: { type: 'boolean' } }, ['element', 'text']),
   },
   {
+    name: 'repo_facts',
+    description:
+      "Get the fact sheet of a git repository: purpose, layers, entry points, endpoints with their handlers and callers, most-depended-on files, recent commits. Call this first when working in a repo instead of reading lots of code. Defaults to the repo of the current terminal directory.",
+    parameters: obj({ path: { type: 'string', description: 'Any path inside the repo (optional)' } }),
+  },
+  {
+    name: 'code_graph',
+    description:
+      "Query the repository's code graph. action: 'search' (files, functions, classes, endpoints matching query), 'file' (a file's symbols, imports, importers and endpoints; query = file path), 'endpoints' (HTTP routes / IPC channels with handler and callers; query filters), 'dependents' (files that import a file, up to 3 hops; query = file path), 'layers' (imports between layers).",
+    parameters: obj(
+      {
+        action: { type: 'string', enum: ['search', 'file', 'endpoints', 'dependents', 'layers'] },
+        query: { type: 'string' },
+        path: { type: 'string', description: 'Any path inside the repo (optional)' },
+      },
+      ['action']
+    ),
+  },
+  {
     name: 'run_command',
     description:
       'Run a PowerShell command on the user\'s Windows PC. The working directory persists between calls (use Set-Location to move). Output and exit code are returned. The user sees it in the Terminal panel and may need to approve it.',
@@ -98,6 +117,27 @@ async function runTool(ctx, name, args) {
         return { content: await browser.click(Number(args.element)) };
       case 'type_text':
         return { content: await browser.type(Number(args.element), args.text, !!args.submit) };
+
+      case 'repo_facts':
+      case 'code_graph': {
+        const rk = ctx.repoKnowledge;
+        // Models pass all sorts of things as `path` (repo name, a file path): use it only
+        // if it points into a repo, otherwise the terminal's current directory.
+        let repo = null;
+        if (args.path) {
+          let p = resolve(args.path);
+          while (p && !fs.existsSync(p) && path.dirname(p) !== p) p = path.dirname(p);
+          repo = await rk.ensureFor(p);
+        }
+        repo ||= await rk.ensureFor(terminal.workingDir);
+        if (!repo) return { content: 'Not inside a git repository. Pass a path inside a repo, or cd into one with run_command.', isError: true };
+        if (name === 'repo_facts') return { content: rk.facts(repo) || 'The repository is still being indexed; try again in a moment.' };
+        // A file path given as `path` instead of `query` (file / dependents).
+        const q = args.query || (['file', 'dependents'].includes(args.action) && args.path ? path.relative(repo, resolve(args.path)).split(path.sep).join('/') : '');
+        return { content: `Repository: ${repo}
+
+` + rk.query(repo, args.action, q) };
+      }
 
       case 'run_command': {
         const check = permissions.checkCommand(args.command, settings);

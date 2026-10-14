@@ -129,6 +129,35 @@ module.exports = {
     });
   },
 
+  // TRACE plugin (github.com/axakon/TRACE) in the app's Claude Code profile.
+  // Installs it if missing; updates the marketplace at most once a day.
+  async ensurePlugin({ update = false, checkOnly = false } = {}) {
+    if (!findClaude()) return { ok: false, error: 'Claude Code is not installed' };
+    fs.mkdirSync(configDir(), { recursive: true });
+    const run = async (args) => {
+      const child = spawnClaude(args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      let out = '';
+      child.stdout.on('data', (d) => (out += d));
+      child.stderr.on('data', (d) => (out += d));
+      const code = await new Promise((r) => child.on('close', r));
+      return { code, out };
+    };
+    const list = await run(['plugin', 'list']);
+    if (!/trace@trace/.test(list.out)) {
+      if (checkOnly) return { ok: false, error: 'not installed yet (installs on first use)' };
+      const m = await run(['plugin', 'marketplace', 'add', 'axakon/TRACE']);
+      if (m.code !== 0 && !/already/i.test(m.out)) return { ok: false, error: m.out.trim().slice(-300) };
+      const i = await run(['plugin', 'install', 'trace@trace']);
+      if (i.code !== 0) return { ok: false, error: i.out.trim().slice(-300) };
+      return { ok: true, installed: true };
+    }
+    if (update) {
+      await run(['plugin', 'marketplace', 'update', 'trace']);
+      await run(['plugin', 'update', 'trace@trace']);
+    }
+    return { ok: true, version: (list.out.match(/trace@trace[\s\S]*?Version:\s*([\d.]+)/) || [])[1] };
+  },
+
   forget() {
     statusCache = null;
   },
