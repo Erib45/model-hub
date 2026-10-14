@@ -43,18 +43,23 @@
       <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
       <symbol id="i-compress" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
       <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16"/></symbol>
+      <symbol id="i-sidebar" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+      <symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></symbol>
+      <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 15h18"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
     </defs>
   </svg>
 
   <div id="app">
     <aside id="sidebar">
-      <div class="brand"><svg class="ic logo"><use href="#i-logo"/></svg>Model Hub</div>
+      <div class="brand"><svg class="ic logo"><use href="#i-logo"/></svg><span class="brand-name">Model Hub</span><button id="collapseSidebar" class="icon-btn" title="Collapse sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button></div>
       <button id="newChatBtn" class="new-chat"><svg class="ic"><use href="#i-plus"/></svg>New chat</button>
       <div class="section-label">Chats</div>
       <ul id="chatList"></ul>
 
       <nav class="sidebar-nav">
+        <button id="toolsToggleBtn" class="nav-btn" title="Show or hide the tools panel (Ctrl+J)"><svg class="ic"><use href="#i-panel"/></svg><span class="lbl">Tools</span></button>
         <button data-view="library" class="nav-btn"><svg class="ic"><use href="#i-library"/></svg>Library</button>
         <button data-view="discover" class="nav-btn"><svg class="ic"><use href="#i-compass"/></svg>Discover <span id="dlBadge" class="badge" hidden></span></button>
         <button data-view="settings" class="nav-btn"><svg class="ic"><use href="#i-settings"/></svg>Settings</button>
@@ -64,7 +69,9 @@
         <button id="themeToggle" class="icon-btn" title="Toggle light / dark mode"><svg class="ic"><use href="#i-sun"/></svg></button>
       </div>
     </aside>
+    <div class="gutter gutter-v" id="gutterSidebar" title="Drag to resize"></div>
 
+    <div id="workspace">
     <main id="main">
       <!-- Chat -->
       <section id="view-chat" class="view">
@@ -73,7 +80,7 @@
           <div class="model-picker">
             <select id="modelSelect" title="Model — switch any time; the conversation carries over"></select>
             <label class="pill" title="Let the model use the web browser, terminal and files">
-              <input type="checkbox" id="toolsToggle" checked /><svg class="ic"><use href="#i-tool"/></svg>Tools
+              <input type="checkbox" id="toolsToggle" checked /><svg class="ic"><use href="#i-tool"/></svg>Agent tools
             </label>
             <label class="pill select-pill" title="When may the AI run commands / write files without asking?">
               <svg class="ic"><use href="#i-shield"/></svg>
@@ -378,6 +385,7 @@
         </div>
       </section>
     </main>
+    <div class="gutter" id="gutterPanel" title="Drag to resize"></div>
 
     <aside id="panel">
       <div class="panel-tabs">
@@ -385,8 +393,23 @@
         <button data-tab="terminal" class="tab"><svg class="ic"><use href="#i-terminal"/></svg>Terminal</button>
         <button data-tab="git" class="tab"><svg class="ic"><use href="#i-branch"/></svg>Git <span id="gitTabCount" class="badge" hidden></span></button>
         <button data-tab="android" class="tab"><svg class="ic"><use href="#i-phone"/></svg>Android</button>
-        <button id="collapsePanel" class="tab icon" title="Hide panel"><svg class="ic"><use href="#i-chev-right"/></svg></button>
+        <span class="spacer"></span>
+        <button id="splitBtn" class="icon-btn" title="Split: show a second tool"><svg class="ic"><use href="#i-split"/></svg></button>
+        <div class="dock-wrap">
+          <button id="dockBtn" class="icon-btn" title="Move the tools panel"><svg class="ic"><use href="#i-dock"/></svg></button>
+          <div id="dockMenu" class="menu" hidden>
+            <div class="menu-title">Dock tools panel</div>
+            <button data-dock="right">Right</button>
+            <button data-dock="left">Left</button>
+            <button data-dock="bottom">Bottom</button>
+            <div class="menu-sep"></div>
+            <label class="menu-check"><input type="checkbox" id="autoOpenTools" /> Open when an agent uses a tool</label>
+            <button data-reset>Reset layout</button>
+          </div>
+        </div>
+        <button id="collapsePanel" class="icon-btn" title="Hide tools panel (Ctrl+J)"><svg class="ic"><use href="#i-x"/></svg></button>
       </div>
+      <div id="slotA" class="slot">
 
       <div id="tab-browser" class="tab-body">
         <div class="browser-bar">
@@ -505,8 +528,20 @@
           <span id="fps" class="muted"></span>
         </div>
       </div>
+      </div>
+      <div class="gutter" id="gutterSplit" hidden title="Drag to resize"></div>
+      <div id="slotB" class="slot" hidden>
+        <div class="slot-head">
+          <select id="slotBSelect" title="Tool shown in the second pane">
+            <option value="browser">Browser</option><option value="terminal">Terminal</option><option value="git">Git</option><option value="android">Android</option>
+          </select>
+          <span class="spacer"></span>
+          <button id="closeSplit" class="icon-btn" title="Close split"><svg class="ic"><use href="#i-x"/></svg></button>
+        </div>
+        <div id="slotBBody" class="slot-body"></div>
+      </div>
     </aside>
-    <button id="expandPanel" class="icon-btn" hidden title="Show side panel"><svg class="ic"><use href="#i-chev-left"/></svg></button>
+    </div>
   </div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>

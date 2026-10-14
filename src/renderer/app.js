@@ -11,7 +11,7 @@ const state = {
   busy: new Set(), // chatIds currently generating
   live: null, // DOM refs for the streaming assistant bubble
   panelTab: 'browser',
-  panelOpen: true,
+  panelOpen: false,
 };
 
 // ---------------- markdown (minimal, safe) ----------------
@@ -106,14 +106,14 @@ document.addEventListener('click', (e) => {
 function showView(view) {
   state.view = view;
   for (const v of ['chat', 'library', 'discover', 'settings', 'setup']) $(`#view-${v}`).hidden = v !== view;
-  document.querySelectorAll('.nav-btn').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
+  document.querySelectorAll('.nav-btn[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   if (view === 'library') renderLibrary();
   if (view === 'settings') loadSettings();
   if (view === 'discover') renderDiscover();
   if (view === 'setup') renderSetup();
   renderChatList();
 }
-document.querySelectorAll('.nav-btn').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
+document.querySelectorAll('.nav-btn[data-view]').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
 
 // ---------------- ollama status ----------------
 
@@ -1212,7 +1212,7 @@ function renderChat() {
   $('#chatTitle').disabled = !c;
   if (c?.model) renderModelSelect();
   if (!c || !c.messages.length) {
-    box.innerHTML = `<div class="empty-chat"><h2>Start chatting</h2><p>Pick a model above. You can switch models mid-conversation — the next model sees everything said so far.</p><p>With Tools on, the model can search and browse in the panel on the right, use the terminal and edit files. Long chat? Use Compact to summarize and trim it.</p></div>`;
+    box.innerHTML = `<div class="empty-chat"><h2>Start chatting</h2><p>Pick a model above. You can switch models mid-conversation — the next model sees everything said so far.</p><p>With Agent tools on, the model can search and browse, use the terminal and edit files; the tools panel opens when it does (or press Ctrl+J). Long chat? Use Compact to summarize and trim it.</p></div>`;
   } else {
     c.messages.forEach((m, i, all) => box.appendChild(messageEl(m, i, all)));
   }
@@ -1329,9 +1329,9 @@ hub.chats.onEvent((ev) => {
       break;
     case 'tool_call':
       // Show the user what the AI is working on.
-      if (['web_search', 'open_url', 'read_page', 'click', 'type_text'].includes(ev.name)) openPanel('browser');
+      if (['web_search', 'open_url', 'read_page', 'click', 'type_text'].includes(ev.name)) openPanel('browser', { auto: true });
       else if (ev.name === 'run_command') {
-        openPanel('terminal');
+        openPanel('terminal', { auto: true });
         selectTerm('ai');
       }
       break;
@@ -1740,7 +1740,7 @@ const gitState = { repo: '', repos: [], info: null, selected: null, sub: 'change
 const STATUS_NAMES = { M: 'modified', A: 'added', D: 'deleted', R: 'renamed', C: 'copied', U: 'conflict', '?': 'new file', T: 'type changed' };
 
 function gitVisible() {
-  return state.panelOpen && state.panelTab === 'git' && !document.hidden;
+  return toolVisible('git') && !document.hidden;
 }
 
 async function gitActivate() {
@@ -2347,7 +2347,7 @@ document.addEventListener('click', (e) => {
 // ---------------- right panel: browser + android ----------------
 
 function syncBrowserView() {
-  const visible = state.panelOpen && state.panelTab === 'browser';
+  const visible = toolVisible('browser') && $('#dockMenu').hidden;
   hub.browser.setVisible(visible);
   if (visible) {
     const r = $('#browserHost').getBoundingClientRect();
@@ -2357,30 +2357,209 @@ function syncBrowserView() {
 new ResizeObserver(syncBrowserView).observe($('#browserHost'));
 window.addEventListener('resize', syncBrowserView);
 
-function openPanel(tab) {
+// ---------------- layout: tools panel, docking, split, resizing ----------------
+
+const TOOLS_LIST = ['browser', 'terminal', 'git', 'android'];
+const LAYOUT_DEFAULT = { dock: 'right', panelSize: 0, sidebarWidth: 248, sidebarCollapsed: false, split: null, splitRatio: 0.5, autoOpen: true };
+const layout = (() => {
+  try {
+    return { ...LAYOUT_DEFAULT, ...JSON.parse(localStorage.getItem('layout') || '{}') };
+  } catch {
+    return { ...LAYOUT_DEFAULT };
+  }
+})();
+const saveLayout = () => {
+  try {
+    localStorage.setItem('layout', JSON.stringify(layout));
+  } catch {}
+};
+state.panelOpen = false; // hidden until an agent uses a tool or the user opens it
+
+let shownTools = new Set();
+const toolVisible = (name) => state.panelOpen && (state.panelTab === name || (layout.split === name && layout.split !== state.panelTab));
+
+function applyLayout() {
+  const app = $('#app');
+  app.dataset.dock = layout.dock;
+  app.classList.toggle('sidebar-collapsed', layout.sidebarCollapsed);
+  $('#sidebar').style.width = layout.sidebarCollapsed ? '' : `${layout.sidebarWidth}px`;
+  $('#gutterSidebar').hidden = layout.sidebarCollapsed;
+  $('#panel').hidden = !state.panelOpen;
+  $('#gutterPanel').hidden = !state.panelOpen;
+  const ws = $('#workspace').getBoundingClientRect();
+  const horizontal = layout.dock !== 'bottom';
+  const total = horizontal ? ws.width : ws.height;
+  const fallback = Math.round(total * (horizontal ? 0.45 : 0.4));
+  const size = Math.max(horizontal ? 340 : 180, Math.min(layout.panelSize || fallback, total - (horizontal ? 380 : 200)));
+  $('#panel').style.width = horizontal ? `${size}px` : '';
+  $('#panel').style.height = horizontal ? '' : `${size}px`;
+
+  // Tools into slots: the active tab in A, the split tool (if any) in B.
+  const b = layout.split && layout.split !== state.panelTab ? layout.split : null;
+  for (const t of TOOLS_LIST) {
+    const el = $(`#tab-${t}`);
+    if (t === state.panelTab) {
+      if (el.parentElement !== $('#slotA')) $('#slotA').appendChild(el);
+      el.hidden = false;
+    } else if (t === b) {
+      if (el.parentElement !== $('#slotBBody')) $('#slotBBody').appendChild(el);
+      el.hidden = false;
+    } else el.hidden = true;
+  }
+  $('#slotB').hidden = !b;
+  $('#gutterSplit').hidden = !b;
+  if (b) {
+    $('#slotBSelect').value = b;
+    $('#slotA').style.flex = `${layout.splitRatio} 1 0`;
+    $('#slotB').style.flex = `${1 - layout.splitRatio} 1 0`;
+  } else {
+    $('#slotA').style.flex = '';
+  }
+  document.querySelectorAll('.tab[data-tab]').forEach((t) => {
+    t.classList.toggle('active', t.dataset.tab === state.panelTab);
+    t.classList.toggle('in-split', t.dataset.tab === b);
+  });
+  $('#toolsToggleBtn').classList.toggle('active', state.panelOpen);
+  $('#autoOpenTools').checked = layout.autoOpen;
+  document.querySelectorAll('#dockMenu [data-dock]').forEach((x) => x.classList.toggle('on', x.dataset.dock === layout.dock));
+
+  // Start whatever just became visible (not on every resize).
+  const nowVisible = new Set(state.panelOpen ? [state.panelTab, b].filter(Boolean) : []);
+  for (const t of nowVisible) {
+    if (shownTools.has(t)) continue;
+    if (t === 'terminal') termActivate();
+    if (t === 'git') gitActivate();
+    if (t === 'android') androidActivate();
+  }
+  shownTools = nowVisible;
+  requestAnimationFrame(() => {
+    syncBrowserView();
+    for (const s of ptyState.sessions.values()) {
+      try {
+        s.fit.fit();
+      } catch {}
+    }
+  });
+}
+
+function openPanel(tab, { auto = false } = {}) {
+  if (auto && !layout.autoOpen && !state.panelOpen) return; // user turned auto-open off
+  if (auto && state.panelOpen && layout.split === tab) return; // already visible in the split pane
   state.panelOpen = true;
-  state.panelTab = tab;
-  $('#panel').hidden = false;
-  $('#expandPanel').hidden = true;
-  document.querySelectorAll('.tab[data-tab]').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
-  $('#tab-browser').hidden = tab !== 'browser';
-  $('#tab-terminal').hidden = tab !== 'terminal';
-  $('#tab-git').hidden = tab !== 'git';
-  if (tab === 'terminal') termActivate();
-  if (tab === 'git') gitActivate();
-  if (tab === 'terminal') refreshCwd();
-  $('#tab-android').hidden = tab !== 'android';
-  requestAnimationFrame(syncBrowserView);
-  if (tab === 'android') androidActivate();
+  if (tab) state.panelTab = tab;
+  applyLayout();
+}
+function closePanel() {
+  state.panelOpen = false;
+  applyLayout();
+}
+function togglePanel() {
+  state.panelOpen ? closePanel() : openPanel(state.panelTab);
 }
 document.querySelectorAll('.tab[data-tab]').forEach((t) => (t.onclick = () => openPanel(t.dataset.tab)));
-$('#collapsePanel').onclick = () => {
-  state.panelOpen = false;
-  $('#panel').hidden = true;
-  $('#expandPanel').hidden = false;
-  syncBrowserView();
+$('#collapsePanel').onclick = closePanel;
+$('#toolsToggleBtn').onclick = togglePanel;
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
+    e.preventDefault();
+    togglePanel();
+  }
+});
+$('#collapseSidebar').onclick = () => {
+  layout.sidebarCollapsed = !layout.sidebarCollapsed;
+  saveLayout();
+  applyLayout();
 };
-$('#expandPanel').onclick = () => openPanel(state.panelTab);
+
+// Split view
+$('#splitBtn').onclick = () => {
+  layout.split = layout.split ? null : TOOLS_LIST.find((t) => t !== state.panelTab && t !== 'android') || 'terminal';
+  saveLayout();
+  applyLayout();
+};
+$('#slotBSelect').onchange = () => {
+  const t = $('#slotBSelect').value;
+  if (t === state.panelTab) state.panelTab = layout.split; // swap
+  layout.split = t;
+  saveLayout();
+  applyLayout();
+};
+$('#closeSplit').onclick = () => {
+  layout.split = null;
+  saveLayout();
+  applyLayout();
+};
+
+// Dock menu
+$('#dockBtn').onclick = (e) => {
+  e.stopPropagation();
+  $('#dockMenu').hidden = !$('#dockMenu').hidden;
+  // The browser page is drawn above the app: hide it while the menu is open.
+  hub.browser.setVisible(!$('#dockMenu').hidden ? false : toolVisible('browser'));
+};
+document.addEventListener('click', (e) => {
+  if (!$('#dockMenu').hidden && !e.target.closest('.dock-wrap')) {
+    $('#dockMenu').hidden = true;
+    syncBrowserView();
+  }
+});
+document.querySelectorAll('#dockMenu [data-dock]').forEach((b) => (b.onclick = () => {
+  layout.dock = b.dataset.dock;
+  layout.panelSize = 0; // re-derive a sensible size for the new orientation
+  saveLayout();
+  $('#dockMenu').hidden = true;
+  applyLayout();
+}));
+$('#autoOpenTools').onchange = () => {
+  layout.autoOpen = $('#autoOpenTools').checked;
+  saveLayout();
+};
+$('#dockMenu [data-reset]').onclick = () => {
+  Object.assign(layout, LAYOUT_DEFAULT);
+  saveLayout();
+  $('#dockMenu').hidden = true;
+  applyLayout();
+};
+
+// Drag-to-resize gutters
+function dragGutter(gutter, onMove) {
+  gutter.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    gutter.setPointerCapture(e.pointerId);
+    document.body.classList.add('dragging', gutter.classList.contains('gutter-h') || (gutter.id === 'gutterPanel' && layout.dock === 'bottom') ? 'dragging-row' : 'dragging-col');
+    hub.browser.setVisible(false); // the embedded page would swallow the mouse
+    const move = (ev) => onMove(ev);
+    const up = () => {
+      gutter.removeEventListener('pointermove', move);
+      gutter.removeEventListener('pointerup', up);
+      document.body.classList.remove('dragging', 'dragging-row', 'dragging-col');
+      saveLayout();
+      applyLayout();
+    };
+    gutter.addEventListener('pointermove', move);
+    gutter.addEventListener('pointerup', up);
+  });
+}
+dragGutter($('#gutterSidebar'), (e) => {
+  layout.sidebarWidth = Math.max(180, Math.min(480, e.clientX));
+  $('#sidebar').style.width = `${layout.sidebarWidth}px`;
+});
+dragGutter($('#gutterPanel'), (e) => {
+  const ws = $('#workspace').getBoundingClientRect();
+  const size = layout.dock === 'right' ? ws.right - e.clientX : layout.dock === 'left' ? e.clientX - ws.left : ws.bottom - e.clientY;
+  const total = layout.dock === 'bottom' ? ws.height : ws.width;
+  layout.panelSize = Math.max(layout.dock === 'bottom' ? 180 : 340, Math.min(size, total - (layout.dock === 'bottom' ? 200 : 380)));
+  $('#panel').style[layout.dock === 'bottom' ? 'height' : 'width'] = `${layout.panelSize}px`;
+});
+dragGutter($('#gutterSplit'), (e) => {
+  const head = $('.panel-tabs').getBoundingClientRect();
+  const p = $('#panel').getBoundingClientRect();
+  const ratio = (e.clientY - head.bottom) / (p.bottom - head.bottom);
+  layout.splitRatio = Math.max(0.15, Math.min(0.85, ratio));
+  $('#slotA').style.flex = `${layout.splitRatio} 1 0`;
+  $('#slotB').style.flex = `${1 - layout.splitRatio} 1 0`;
+});
+window.addEventListener('resize', () => applyLayout());
 
 $('#bBack').onclick = () => hub.browser.back();
 $('#bFwd').onclick = () => hub.browser.forward();
@@ -2415,7 +2594,7 @@ async function androidActivate() {
   refreshDevices();
   clearInterval(android.pollTimer);
   android.pollTimer = setInterval(() => {
-    if (state.panelTab !== 'android' || !state.panelOpen) return clearInterval(android.pollTimer);
+    if (!toolVisible('android')) return clearInterval(android.pollTimer);
     refreshDevices();
   }, 3000);
 }
@@ -2460,7 +2639,7 @@ async function streamAndroid() {
   android.streaming = true;
   let frames = 0;
   let t0 = performance.now();
-  while (android.serial && state.panelOpen && state.panelTab === 'android') {
+  while (android.serial && toolVisible('android')) {
     try {
       const f = await hub.android.frame(android.serial);
       if (canvas.width !== f.width || canvas.height !== f.height) {
@@ -2559,7 +2738,7 @@ document.querySelectorAll('.android-nav [data-key]').forEach((b) => (b.onclick =
     $('#permMode').value = st.permissionMode;
     applyTheme(st.theme);
   });
-  openPanel('browser');
+  applyLayout(); // tools panel starts hidden
   let running = await refreshStatus();
   if (!running) {
     // Ollama installed but not started — start it automatically.
