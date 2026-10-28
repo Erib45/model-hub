@@ -86,6 +86,12 @@ contextBridge.exposeInMainWorld('hub', {
   },
   system: { info: invoke('system:info') },
   approvals: { onRequest: on('approval:request'), respond: invoke('approval:respond') },
+  agents: {
+    runMerger: invoke('agents:runMerger'),
+    runTester: invoke('agents:runTester'),
+    sendReport: invoke('agents:sendReport'),
+    onEvent: on('agents:event'),
+  },
   settings: { get: invoke('settings:get'), set: invoke('settings:set'), pickFolder: invoke('settings:pickFolder'), pickFile: invoke('settings:pickFile') },
   pty: {
     create: invoke('pty:create'),
@@ -99,6 +105,7 @@ contextBridge.exposeInMainWorld('hub', {
     run: invoke('terminal:run'),
     kill: invoke('terminal:kill'),
     cwd: invoke('terminal:cwd'),
+    setCwd: invoke('terminal:setCwd'),
     onStart: on('terminal:start'),
     onData: on('terminal:data'),
     onEnd: on('terminal:end'),

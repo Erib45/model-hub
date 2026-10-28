@@ -66,52 +66,81 @@ async function hfFiles(repo) {
   return { repo, gated: !!info.gated, access, quants: [...byQuant.values()].sort((a, b) => a.size - b.size) };
 }
 
-function sha256File(file, onProgress) {
+function sha256File(file, onProgress, signal) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
     const total = fs.statSync(file).size;
     let done = 0;
-    fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 })
+    const stream = fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 });
+    const onAbort = () => stream.destroy(new Error('aborted'));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    stream
       .on('data', (chunk) => {
         hash.update(chunk);
         done += chunk.length;
         onProgress(done, total);
       })
-      .on('end', () => resolve(hash.digest('hex')))
-      .on('error', reject);
+      .on('end', () => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(hash.digest('hex'));
+      })
+      .on('error', (err) => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      });
   });
 }
 
 // Imports a local GGUF file as an Ollama model named `name`.
-async function importGguf(file, name, onProgress) {
+async function importGguf(file, name, onProgress, signal) {
   if (!/\.gguf$/i.test(file)) throw new Error('Only .gguf files can be imported');
   const total = fs.statSync(file).size;
-  const digest = 'sha256:' + (await sha256File(file, (d, t) => onProgress({ status: 'hashing file', completed: d, total: t })));
+  const fullWork = total * 2; // step 1: hash (0..50%), step 2: upload (50..100%)
+  const digest =
+    'sha256:' +
+    (await sha256File(
+      file,
+      (d) => onProgress({ status: 'verifying GGUF file (step 1/2)', completed: Math.round(d * 0.5), total }),
+      signal
+    ));
 
-  const head = await fetch(`${api.BASE}/api/blobs/${digest}`, { method: 'HEAD' });
+  const head = await fetch(`${api.BASE}/api/blobs/${digest}`, { method: 'HEAD', signal });
   if (head.status !== 200) {
     let sent = 0;
-    const stream = fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 });
-    stream.on('data', (c) => {
-      sent += c.length;
-      onProgress({ status: 'copying into Ollama', completed: sent, total });
+    const nodeStream = fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 });
+    // Consume via async iterator so the stream isn't put into flowing mode before Readable.toWeb reads it.
+    const tracked = Readable.from(
+      (async function* () {
+        for await (const chunk of nodeStream) {
+          if (signal?.aborted) throw new Error('aborted');
+          sent += chunk.length;
+          onProgress({
+            status: 'copying into Ollama (step 2/2)',
+            completed: Math.round(total * 0.5 + sent * 0.5),
+            total,
+          });
+          yield chunk;
+        }
+      })()
+    );
+    const res = await fetch(`${api.BASE}/api/blobs/${digest}`, {
+      method: 'POST',
+      headers: { 'Content-Length': String(total) },
+      body: Readable.toWeb(tracked),
+      duplex: 'half',
+      signal,
     });
-    const res = await fetch(`${api.BASE}/api/blobs/${digest}`, { method: 'POST', body: Readable.toWeb(stream), duplex: 'half' });
     if (!res.ok) throw new Error(`Upload failed: ${res.status} ${await res.text()}`);
+  } else {
+    onProgress({ status: 'blob already in Ollama store', completed: total, total });
   }
 
-  const res = await fetch(`${api.BASE}/api/create`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: name, files: { [path.basename(file)]: digest }, stream: true }),
-  });
-  if (!res.ok) throw new Error(`Create failed: ${res.status} ${await res.text()}`);
-  const text = await res.text();
-  for (const line of text.split('\n').filter(Boolean)) {
-    const obj = JSON.parse(line);
-    if (obj.error) throw new Error(obj.error);
-    onProgress({ status: obj.status });
-  }
+  await api.stream(
+    '/api/create',
+    { model: name, files: { [path.basename(file)]: digest }, stream: true },
+    (obj) => onProgress({ status: obj.status || 'creating model…', completed: total, total }),
+    signal
+  );
 }
 
 let sysInfo = null;

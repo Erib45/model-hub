@@ -48,15 +48,49 @@
       <symbol id="i-split" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18"/></symbol>
       <symbol id="i-dock" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 15h18"/></symbol>
       <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+      <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
     </defs>
   </svg>
 
+  <header id="titlebar">
+    <div class="tb-left">
+      <button id="collapseSidebar" class="icon-btn tb-btn" title="Toggle sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button>
+      <div class="tb-brand">
+        <svg class="ic logo"><use href="#i-logo"/></svg>
+        <span class="tb-title">Model Hub</span>
+      </div>
+      <div class="tb-sep"></div>
+      <button id="tbWorkspacePill" class="tb-pill" title="Active working folder — click to change folder">
+        <svg class="ic"><use href="#i-folder"/></svg>
+        <span id="tbWorkspaceLabel">workspace</span>
+      </button>
+      <button id="tbBranchPill" class="tb-pill tb-branch" hidden title="Git branch — click to open Git panel">
+        <svg class="ic"><use href="#i-branch"/></svg>
+        <span id="tbBranchLabel"></span>
+      </button>
+    </div>
+    <div class="tb-center" id="tbStatusCenter"></div>
+    <div class="tb-right">
+      <button id="tbToolsBtn" class="tb-pill" title="Show or hide the tools panel (Ctrl+J)">
+        <svg class="ic"><use href="#i-panel"/></svg>
+        <span>Tools</span>
+      </button>
+      <button id="themeToggle" class="icon-btn tb-btn" title="Toggle light / dark mode"><svg class="ic"><use href="#i-sun"/></svg></button>
+    </div>
+  </header>
+
   <div id="app">
     <aside id="sidebar">
-      <div class="brand"><svg class="ic logo"><use href="#i-logo"/></svg><span class="brand-name">Model Hub</span><button id="collapseSidebar" class="icon-btn" title="Collapse sidebar"><svg class="ic"><use href="#i-sidebar"/></svg></button></div>
-      <button id="newChatBtn" class="new-chat"><svg class="ic"><use href="#i-plus"/></svg>New chat</button>
-      <div class="section-label">Chats</div>
+      <button id="newChatBtn" class="new-chat"><svg class="ic"><use href="#i-plus"/></svg><span>New chat</span><kbd>Ctrl+N</kbd></button>
+      <div class="section-head">
+        <span class="section-label">Chats</span>
+        <span id="chatStatusSummary" class="section-meta"></span>
+      </div>
       <ul id="chatList"></ul>
+
+      <div id="sidebarAgentQueue" class="sidebar-pulls sidebar-agent-queue" hidden></div>
+      <div id="sidebarPulls" class="sidebar-pulls" hidden></div>
 
       <nav class="sidebar-nav">
         <button id="toolsToggleBtn" class="nav-btn" title="Show or hide the tools panel (Ctrl+J)"><svg class="ic"><use href="#i-panel"/></svg><span class="lbl">Tools</span></button>
@@ -66,17 +100,30 @@
       </nav>
       <div class="sidebar-foot">
         <div id="ollamaStatus" class="status"></div>
-        <button id="themeToggle" class="icon-btn" title="Toggle light / dark mode"><svg class="ic"><use href="#i-sun"/></svg></button>
       </div>
     </aside>
     <div class="gutter gutter-v" id="gutterSidebar" title="Drag to resize"></div>
 
     <div id="workspace">
     <main id="main">
+      <div id="globalApprovalBar" class="global-approval-bar" hidden></div>
+
       <!-- Chat -->
       <section id="view-chat" class="view">
         <header class="chat-header">
-          <input id="chatTitle" class="title-input" spellcheck="false" placeholder="New chat" />
+          <div class="chat-title-wrap">
+            <input id="chatTitle" class="title-input" spellcheck="false" placeholder="New chat" />
+            <div class="chat-context-pills">
+              <button type="button" id="cwdPill" class="ctx-pill" title="Where the agent works — click to change folder">
+                <svg class="ic"><use href="#i-folder"/></svg>
+                <span id="cwdPillText">workspace</span>
+              </button>
+              <button type="button" id="branchPill" class="ctx-pill branch" hidden title="Active Git branch — click to open Git panel">
+                <svg class="ic"><use href="#i-branch"/></svg>
+                <span id="branchPillText"></span>
+              </button>
+            </div>
+          </div>
           <div class="model-picker">
             <select id="modelSelect" title="Model — switch any time; the conversation carries over"></select>
             <label class="pill" title="Let the model use the web browser, terminal and files">
@@ -95,6 +142,24 @@
               <select id="effortSelect"></select>
             </label>
             <span id="ctxMeter" class="meter" hidden></span>
+            <div class="agent-control-pill" id="testerHeaderGroup">
+              <label class="ac-toggle" title="Toggle automatic Tester Agent after agent edits (1 MR at a time)">
+                <input type="checkbox" id="testerToggle" />
+                <svg class="ic"><use href="#i-activity"/></svg>
+                <span id="testerBtnLabel">Tester</span>
+              </label>
+              <select id="headerTesterModel" class="ac-model" title="Choose model for Tester Agent"></select>
+              <button type="button" id="runTesterBtn" class="ac-run" title="Run Tester Agent now on this chat's repo">▶</button>
+            </div>
+            <div class="agent-control-pill" id="mergerHeaderGroup">
+              <label class="ac-toggle" title="Toggle automatic Merger Agent branch conflict checks against main">
+                <input type="checkbox" id="mergerToggle" />
+                <svg class="ic"><use href="#i-branch"/></svg>
+                <span id="mergerBtnLabel">Merger</span>
+              </label>
+              <select id="headerMergerModel" class="ac-model" title="Choose model for Merger Agent"></select>
+              <button type="button" id="runMergerBtn" class="ac-run" title="Run Merger Agent now to check/merge branches">▶</button>
+            </div>
             <button id="compactBtn" class="pill-btn" title="Summarize and trim this chat"><svg class="ic"><use href="#i-compress"/></svg>Compact</button>
           </div>
         </header>
@@ -123,6 +188,8 @@
             <button id="compactApply" class="primary">Apply</button>
           </div>
         </div>
+        <div id="specialistAgentBar" class="specialist-agent-bar" hidden></div>
+        <div id="agentActivityBar" class="agent-activity-bar" hidden></div>
         <form id="composer">
           <div class="composer-box">
             <textarea id="input" rows="2" placeholder="Message…  (Enter to send · Shift+Enter for a new line)"></textarea>
@@ -344,6 +411,38 @@
             <div id="allowRules" class="chips"></div>
           </div>
 
+          <h2>Merger &amp; Tester Agents</h2>
+          <p class="muted small">Automated background specialists using any local or cloud model of your choice. You can also trigger them manually from the Chat header or Git → Agents.</p>
+          <label class="field toggle-field"><span><input type="checkbox" id="setMerger" /> Merger Agent (auto-check branch integration after agent edits)</span>
+            <small>When working on multiple tasks or branches in the same Git repository, the Merger Agent non-destructively tests merging task branches into your base branch (e.g. <code>main</code>). If conflicts exist, it analyzes them and sends a conflict report back to the chat agent that worked on that branch.</small>
+          </label>
+          <label class="field toggle-field"><span><input type="checkbox" id="setMergerAutoSend" checked /> Automatically send conflict reports back to the working agent to resolve</span>
+            <small>When enabled, the chat agent that owns a conflicting branch automatically receives the Merger Agent's report and starts fixing the conflict.</small>
+          </label>
+          <div class="row wrap" style="gap:12px;max-width:680px">
+            <label class="field" style="flex:2;min-width:240px;margin:4px 0">Merger Agent model
+              <select id="setMergerModel"></select>
+            </label>
+            <label class="field" style="flex:1;min-width:160px;margin:4px 0">Target base branch
+              <input id="setMergerTarget" placeholder="main" spellcheck="false" />
+            </label>
+          </div>
+
+          <label class="field toggle-field" style="margin-top:16px"><span><input type="checkbox" id="setTester" /> Tester Agent (auto-run CI pipeline tests after agent edits — 1 MR at a time)</span>
+            <small>Discovers the project's CI template &amp; build pipeline stages (e.g. <code>.gitlab-ci.yml</code>, GitHub Actions, or Gradle <code>test</code> → <code>integrationTests</code> → <code>scenariotests</code>) and runs them sequentially. Strictly queues MRs so only <b>one MR is tested at a time</b> across all agents.</small>
+          </label>
+          <label class="field toggle-field"><span><input type="checkbox" id="setTesterAutoSend" checked /> Automatically send test failure reports back to the working agent to fix</span>
+            <small>When enabled, the working chat agent automatically receives the failure report and fixes the broken tests.</small>
+          </label>
+          <div class="row wrap" style="gap:12px;max-width:680px">
+            <label class="field" style="flex:1;min-width:240px;margin:4px 0">Tester Agent model
+              <select id="setTesterModel"></select>
+            </label>
+            <label class="field" style="flex:1;min-width:240px;margin:4px 0">Custom CI test stages (optional, separate stages with <code>;</code>)
+              <input id="setTesterCmd" placeholder="Auto-detect from CI / Gradle (e.g. gradle test ; gradle integrationTests ; gradle scenariotests)" spellcheck="false" />
+            </label>
+          </div>
+
           <h2>Repo knowledge</h2>
           <label class="field toggle-field"><span><input type="checkbox" id="setRepoKnowledge" /> Map repositories for the AI</span>
             <small>Tracked repos, and any repo a model works in, get a code graph (files, layers, imports, endpoints and who calls them) and a fact sheet. Both are rebuilt after every push or pull and stored in the app's data folder, not in the repo. Models get repo_facts and code_graph tools so they don't have to read the whole codebase. See them in Git → Knowledge.</small>
@@ -465,6 +564,7 @@
             <button data-gsub="changes" class="active">Changes <span id="gitCount" class="count"></span></button>
             <button data-gsub="history">History</button>
             <button data-gsub="knowledge" title="Code graph and fact sheet the AI uses to orient itself">Knowledge</button>
+            <button data-gsub="agents" title="Merger Agent &amp; Tester Agent">Agents</button>
             <span class="spacer"></span>
             <button id="gitOpenFolder" class="icon-btn" title="Open folder"><svg class="ic"><use href="#i-folder"/></svg></button>
             <button id="gitRefresh" class="icon-btn" title="Refresh"><svg class="ic"><use href="#i-refresh"/></svg></button>
@@ -502,6 +602,48 @@
           <div id="git-history" class="git-body" hidden>
             <ul id="gitLog" class="git-log"></ul>
             <div id="gitShow" class="diff-view"><div class="muted center">Select a commit</div></div>
+          </div>
+          <div id="git-agents" class="git-body git-agents-pane" hidden>
+            <div class="card git-agent-card">
+              <div class="git-agent-head">
+                <div>
+                  <h3>
+                    <svg class="ic"><use href="#i-branch"/></svg> Merger Agent
+                    <label class="pill small" style="margin-left:auto"><input type="checkbox" id="gitMergerToggle" /> Enabled</label>
+                  </h3>
+                  <p class="muted small">Checks all task branches in this repo against your base branch (e.g. <code>main</code>). If conflicts exist, it generates a conflict report and sends it back to the agent working on that branch.</p>
+                </div>
+              </div>
+              <div class="row wrap">
+                <label class="small muted">Model <select id="gitMergerModel"></select></label>
+                <label class="small muted">Into branch <input id="gitMergerTarget" value="main" style="width:110px" spellcheck="false" /></label>
+              </div>
+              <div class="row wrap">
+                <button type="button" id="gitMergerCheck" class="primary"><svg class="ic"><use href="#i-branch"/></svg>Check conflicts against base</button>
+                <button type="button" id="gitMergerMerge" title="Merge all clean task branches into the target base branch"><svg class="ic"><use href="#i-check"/></svg>Merge clean branches into base</button>
+              </div>
+              <div id="gitMergerStatus" class="git-agent-output"></div>
+            </div>
+
+            <div class="card git-agent-card">
+              <div class="git-agent-head">
+                <div>
+                  <h3>
+                    <svg class="ic"><use href="#i-activity"/></svg> Tester Agent <span class="chip">1 MR at a time</span>
+                    <label class="pill small" style="margin-left:auto"><input type="checkbox" id="gitTesterToggle" /> Enabled</label>
+                  </h3>
+                  <p class="muted small">Runs the project's CI pipeline test stages sequentially (e.g. <code>gradle test</code> → <code>gradle integrationTests</code> → <code>gradle scenariotests</code>), evaluates results with your chosen model, and sends failure reports back to the working agent.</p>
+                </div>
+              </div>
+              <div class="row wrap">
+                <label class="small muted">Model <select id="gitTesterModel"></select></label>
+                <input id="gitTesterCmd" placeholder="Auto-detect CI stages (or e.g. gradle test ; gradle integrationTests ; gradle scenariotests)" style="flex:1;min-width:160px" spellcheck="false" />
+              </div>
+              <div class="row wrap">
+                <button type="button" id="gitTesterRun" class="primary"><svg class="ic"><use href="#i-activity"/></svg>Run Tester Agent</button>
+              </div>
+              <div id="gitTesterStatus" class="git-agent-output"></div>
+            </div>
           </div>
         </div>
       </div>

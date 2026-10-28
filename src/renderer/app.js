@@ -3,15 +3,33 @@ const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const icon = (name) => `<svg class="ic"><use href="#i-${name}"/></svg>`;
 const fmtSize = (b) => (b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : (b / 1e6).toFixed(0) + ' MB');
+const fmtSpeed = (bps) => (bps > 0 ? (bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} MB/s` : `${Math.max(1, Math.round(bps / 1e3))} KB/s`) : '');
+const fmtEta = (sec) =>
+  sec != null && isFinite(sec) && sec > 0
+    ? sec >= 3600
+      ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`
+      : sec >= 60
+        ? `${Math.floor(sec / 60)}m ${Math.round(sec % 60)}s`
+        : `${Math.round(sec)}s`
+    : '';
+const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p || '';
 
 const state = {
   view: 'chat',
   models: [],
   chat: null, // current chat object
   busy: new Set(), // chatIds currently generating
+  activities: new Map(), // chatId -> { phase, label, target, panel, cwd, model, startedAt }
+  agentQueue: { testerActive: null, testerQueue: [], mergerActive: null, mergerQueue: [] },
+  pulls: new Map(), // modelName -> pull progress state
   live: null, // DOM refs for the streaming assistant bubble
   panelTab: 'browser',
   panelOpen: false,
+  cwd: '',
+  repoRoot: '',
+  branch: '',
+  ollamaRunning: false,
+  ollamaVersion: '',
 };
 
 // ---------------- markdown (minimal, safe) ----------------
@@ -119,11 +137,13 @@ document.querySelectorAll('.nav-btn[data-view]').forEach((b) => b.addEventListen
 
 async function refreshStatus() {
   const s = await hub.ollama.status();
+  state.ollamaRunning = !!s.running;
+  state.ollamaVersion = s.version || '';
   const el = $('#ollamaStatus');
   if (s.running) {
-    el.innerHTML = `<span class="dot" style="background:var(--ok)"></span>Ollama ${esc(s.version)}`;
+    el.innerHTML = `<span class="dot" style="background:var(--ok);color:var(--ok)"></span>Ollama ${esc(s.version)}`;
   } else {
-    el.innerHTML = `<span class="dot" style="background:var(--danger)"></span>Ollama not running <button id="startOllama">Start</button>`;
+    el.innerHTML = `<span class="dot" style="background:var(--danger);color:var(--danger)"></span>Ollama offline <button id="startOllama">Start</button>`;
     $('#startOllama').onclick = async () => {
       el.textContent = 'Starting Ollama…';
       await hub.ollama.start();
@@ -131,6 +151,7 @@ async function refreshStatus() {
       await loadModels();
     };
   }
+  if (typeof renderTitlebarStatus === 'function') renderTitlebarStatus();
   return s.running;
 }
 
@@ -236,36 +257,131 @@ function editDescription(card, m) {
 }
 
 const pullEls = new Map();
+
+function renderPullsUi() {
+  const activeCount = [...state.pulls.values()].filter((p) => !p.done).length;
+  $('#dlBadge').hidden = !activeCount;
+  $('#dlBadge').textContent = activeCount;
+  if (typeof renderTitlebarStatus === 'function') renderTitlebarStatus();
+
+  const sb = $('#sidebarPulls');
+  if (!sb) return;
+  const items = [...state.pulls.values()];
+  if (!items.length) {
+    sb.hidden = true;
+    sb.innerHTML = '';
+    return;
+  }
+  sb.hidden = false;
+  sb.innerHTML = `
+    <div class="sidebar-pulls-head">
+      <span>${icon('download')} Downloads (${activeCount || items.length})</span>
+      <button class="link small" id="sbOpenDiscover">Details</button>
+    </div>
+    ${items
+      .map((p) => {
+        const pct = p.pct != null ? Math.min(100, Math.max(0, p.pct)) : p.done && !p.error ? 100 : 0;
+        const speedStr = fmtSpeed(p.speed);
+        const etaStr = fmtEta(p.eta);
+        const subRight = [speedStr, etaStr ? `ETA ${etaStr}` : ''].filter(Boolean).join(' · ') || (p.total ? fmtSize(p.total) : '');
+        return `<div class="sp-item">
+          <div class="sp-top">
+            <span class="sp-name" title="${esc(p.name)}">${esc(p.name)}</span>
+            ${p.done ? `<span class="small ${p.error ? 'error' : 'muted'}">${p.error ? '✕' : '✓'}</span>` : `<button class="mini cancel-sp" data-cancel="${esc(p.name)}">Cancel</button>`}
+          </div>
+          <div class="bar"><div style="width:${pct.toFixed(1)}%"></div></div>
+          <div class="sp-sub">
+            <span>${esc(p.status || 'Downloading…')}${p.pct != null && !p.done ? ` (${p.pct.toFixed(0)}%)` : ''}</span>
+            <span>${esc(subRight)}</span>
+          </div>
+        </div>`;
+      })
+      .join('')}`;
+  sb.querySelector('#sbOpenDiscover')?.addEventListener('click', () => showView('discover'));
+  sb.querySelectorAll('[data-cancel]').forEach((b) => (b.onclick = () => hub.models.cancelPull(b.dataset.cancel)));
+}
+
+function syncPullButtons() {
+  const have = installedNames();
+  document.querySelectorAll('[data-pull]').forEach((b) => {
+    const name = b.dataset.pull;
+    const p = state.pulls.get(name);
+    if (p && !p.done) {
+      b.disabled = true;
+      b.textContent = p.queued ? 'Queued…' : p.pct != null ? `Downloading ${p.pct.toFixed(0)}%…` : 'Downloading…';
+    } else if (have.has(name) || have.has(`${name}:latest`) || have.has(name.replace(/:latest$/, ''))) {
+      b.disabled = true;
+      b.textContent = '✓ installed';
+    }
+  });
+}
+
 // `start` defaults to an Ollama pull; imports pass their own starter.
 function startPull(name, start = () => hub.models.pull(name)) {
   name = name.trim();
   if (!name || pullEls.has(name)) return;
   const el = document.createElement('div');
   el.className = 'pull';
-  el.innerHTML = `<div><b>${esc(name)}</b> <span class="st">starting…</span> <button class="cancel">Cancel</button></div><div class="bar"><div style="width:0"></div></div>`;
+  el.innerHTML = `
+    <div class="row">
+      <b>${esc(name)}</b>
+      <span class="st muted">Starting…</span>
+      <span class="spacer"></span>
+      <span class="pull-meta"></span>
+      <button class="mini cancel">Cancel</button>
+    </div>
+    <div class="bar"><div style="width:0"></div></div>`;
   el.querySelector('.cancel').onclick = () => hub.models.cancelPull(name);
   $('#pulls').appendChild(el);
   pullEls.set(name, el);
-  updateDlBadge();
+  state.pulls.set(name, { name, status: 'Starting…', pct: 0, done: false });
+  renderPullsUi();
+  syncPullButtons();
   start();
 }
-function updateDlBadge() {
-  $('#dlBadge').hidden = !pullEls.size;
-  $('#dlBadge').textContent = pullEls.size;
-}
+
 hub.models.onPullProgress((p) => {
   const el = pullEls.get(p.name);
-  if (!el) return;
-  const pct = p.total ? (100 * (p.completed || 0)) / p.total : null;
-  el.querySelector('.st').textContent = p.status + (pct != null ? ` — ${pct.toFixed(1)}% of ${fmtSize(p.total)}` : '');
-  if (pct != null) el.querySelector('.bar > div').style.width = pct + '%';
+  const pct = p.total ? Math.min(100, (100 * (p.completed || 0)) / p.total) : p.percent != null ? p.percent : null;
+  const cur = state.pulls.get(p.name) || { name: p.name };
+  const merged = {
+    ...cur,
+    ...p,
+    pct: pct != null ? pct : cur.pct,
+  };
+  state.pulls.set(p.name, merged);
+
+  if (el) {
+    const sizeInfo = p.total ? ` — ${fmtSize(p.completed || 0)} / ${fmtSize(p.total)} (${(pct || 0).toFixed(1)}%)` : pct != null ? ` — ${pct.toFixed(1)}%` : '';
+    el.querySelector('.st').textContent = (p.status || 'Downloading…') + sizeInfo;
+    const metaEl = el.querySelector('.pull-meta');
+    if (metaEl) {
+      const speedStr = fmtSpeed(p.speed);
+      const etaStr = fmtEta(p.eta);
+      metaEl.textContent = [speedStr, etaStr ? `ETA ${etaStr}` : ''].filter(Boolean).join(' · ');
+    }
+    if (merged.pct != null) el.querySelector('.bar > div').style.width = `${merged.pct}%`;
+  }
+
+  renderPullsUi();
+  syncPullButtons();
+
   if (p.done) {
-    el.querySelector('.cancel').remove();
+    if (el) {
+      el.querySelector('.cancel')?.remove();
+      if (!p.error) el.querySelector('.bar > div').style.width = '100%';
+      setTimeout(() => el.remove(), p.error ? 8000 : 3000);
+    }
     pullEls.delete(p.name);
-    updateDlBadge();
-    if (!p.error) el.querySelector('.bar > div').style.width = '100%';
-    setTimeout(() => el.remove(), p.error ? 8000 : 2500);
-    loadModels().then(() => state.view === 'discover' && renderDiscover());
+    setTimeout(() => {
+      state.pulls.delete(p.name);
+      renderPullsUi();
+      syncPullButtons();
+    }, p.error ? 8000 : 3000);
+    loadModels().then(() => {
+      syncPullButtons();
+      if (state.view === 'discover') renderDiscover();
+    });
   }
 });
 $('#pullForm').onsubmit = (e) => {
@@ -294,6 +410,11 @@ function fitBadge(bytes) {
 function downloadBtn(name, bytes, cloud) {
   const have = installedNames();
   if (have.has(name) || have.has(`${name}:latest`) || have.has(name.replace(/:latest$/, ''))) return `<button disabled>✓ ${cloud ? 'added' : 'installed'}</button>`;
+  const active = state.pulls.get(name);
+  if (active && !active.done) {
+    const lbl = active.queued ? 'Queued…' : active.pct != null ? `Downloading ${active.pct.toFixed(0)}%…` : 'Downloading…';
+    return `<button class="primary" data-pull="${esc(name)}" disabled>${esc(lbl)}</button>`;
+  }
   return cloud
     ? `<button class="primary" data-pull="${esc(name)}" title="Adds the cloud model to your library (no download)">${icon('plus')}Add</button>`
     : `<button class="primary" data-pull="${esc(name)}">${icon('download')}${bytes ? fmtSize(bytes) : 'Download'}</button>`;
@@ -304,6 +425,7 @@ function wirePulls(root) {
     b.disabled = true;
     b.textContent = 'Downloading…';
   }));
+  syncPullButtons();
 }
 
 document.querySelectorAll('.subtabs button').forEach((b) => (b.onclick = () => {
@@ -687,11 +809,7 @@ function renderRecJudges() {
       : m.provider === 'geminicli' ? -1
       : m.provider === 'anthropic' ? (/opus-5-5/.test(m.name) ? 0 : 1)
       : m.provider === 'openai' ? 2
-      : PLAN_PROVIDERS.includes(m.provider)
-        ? 'Runs on your own plan via the official CLI (counts toward your plan limits, no API billing); no web search in this mode.'
-      : m.provider === 'openai'
-        ? 'OpenAI can search the web while picking. Billed to your API key: usually a few cents per pick.'
-        : m.provider === 'gemini' ? (/pro/.test(m.name) ? 3 : 4)
+      : m.provider === 'gemini' ? (/pro/.test(m.name) ? 3 : 4)
       : m.cloud ? 5 : 6;
   judges.sort((a, b) => rank(a) - rank(b) || (b.size || 0) - (a.size || 0));
   sel.innerHTML = judges.length
@@ -705,13 +823,17 @@ function updateRecNote() {
   const m = modelInfo($('#recModel').value);
   $('#recNote').textContent = !m
     ? ''
-    : m.provider === 'anthropic'
-      ? 'Claude can search the web for recent benchmarks while picking. Billed to your API key: roughly $0.05–0.40 per pick depending on the model and how much it searches.'
-      : m.provider === 'gemini'
-        ? 'Gemini can use Google Search while picking. Usually free within the AI Studio free tier, otherwise a few cents.'
-        : m.cloud
-          ? 'Runs on Ollama cloud: uses your free-plan quota; no web search.'
-          : 'Runs locally: free and private, but small local models know little about recent models and have no web access. Treat their picks as rough.';
+    : PLAN_PROVIDERS.includes(m.provider)
+      ? 'Runs on your own plan via the official CLI (counts toward your plan limits, no API billing); no web search in this mode.'
+      : m.provider === 'openai'
+        ? 'OpenAI can search the web while picking. Billed to your API key: usually a few cents per pick.'
+        : m.provider === 'anthropic'
+          ? 'Claude can search the web for recent benchmarks while picking. Billed to your API key: roughly $0.05–0.40 per pick depending on the model and how much it searches.'
+          : m.provider === 'gemini'
+            ? 'Gemini can use Google Search while picking. Usually free within the AI Studio free tier, otherwise a few cents.'
+            : m.cloud
+              ? 'Runs on Ollama cloud: uses your free-plan quota; no web search.'
+              : 'Runs locally: free and private, but small local models know little about recent models and have no web access. Treat their picks as rough.';
 }
 $('#recModel').onchange = () => {
   localStorage.setItem('rec:judge', $('#recModel').value);
@@ -847,6 +969,29 @@ async function loadSettings() {
   $('#setReviewerModel').innerHTML = `<option value="">Automatic (smallest suitable installed model)</option>` +
     locals.map((m) => `<option value="${esc(m.name)}">${esc(m.name)} (${fmtSize(m.size)})</option>`).join('');
   $('#setReviewerModel').value = s.reviewerModel;
+
+  const allModelOpts =
+    `<option value="">Use active chat model (default)</option>` +
+    state.models
+      .filter((m) => !/embed/.test(m.name))
+      .map((m) => `<option value="${esc(m.id)}">${esc(m.provider === 'ollama' ? m.name : m.title)}${PROVIDER_SUFFIX[m.provider] || (m.cloud ? '' : ' (local)')}</option>`)
+      .join('');
+  if ($('#setMerger')) $('#setMerger').checked = !!s.mergerEnabled;
+  if ($('#setMergerAutoSend')) $('#setMergerAutoSend').checked = s.mergerAutoSend !== false;
+  if ($('#setMergerModel')) {
+    $('#setMergerModel').innerHTML = allModelOpts;
+    $('#setMergerModel').value = s.mergerModel || '';
+  }
+  if ($('#setMergerTarget')) $('#setMergerTarget').value = s.mergerTargetBranch || 'main';
+  if ($('#setTester')) $('#setTester').checked = !!s.testerEnabled;
+  if ($('#setTesterAutoSend')) $('#setTesterAutoSend').checked = s.testerAutoSend !== false;
+  if ($('#setTesterModel')) {
+    $('#setTesterModel').innerHTML = allModelOpts;
+    $('#setTesterModel').value = s.testerModel || '';
+  }
+  if ($('#setTesterCmd')) $('#setTesterCmd').value = s.testerCommand || '';
+  if (typeof syncSpecialistAgentControls === 'function') syncSpecialistAgentControls();
+
   $('#allowRules').innerHTML = s.allowRules.length
     ? s.allowRules.map((r, i) => `<span class="chip">${esc(r)} <button class="x" data-i="${i}" title="Remove">✕</button></span>`).join('')
     : '<span class="muted">None yet. Choose "Always allow" on an approval prompt to add one.</span>';
@@ -865,6 +1010,14 @@ $('#saveSettings').onclick = async () => {
     permissionMode: $('#setPerm').value,
     reviewerEnabled: $('#setReviewer').checked,
     reviewerModel: $('#setReviewerModel').value,
+    mergerEnabled: $('#setMerger')?.checked ?? false,
+    mergerAutoSend: $('#setMergerAutoSend')?.checked ?? true,
+    mergerModel: $('#setMergerModel')?.value || '',
+    mergerTargetBranch: $('#setMergerTarget')?.value.trim() || 'main',
+    testerEnabled: $('#setTester')?.checked ?? false,
+    testerAutoSend: $('#setTesterAutoSend')?.checked ?? true,
+    testerModel: $('#setTesterModel')?.value || '',
+    testerCommand: $('#setTesterCmd')?.value.trim() || '',
     handoff: $('#setHandoff').value,
     repoKnowledge: $('#setRepoKnowledge').checked,
     tracePlugin: $('#setTrace').checked,
@@ -873,6 +1026,7 @@ $('#saveSettings').onclick = async () => {
   });
   $('#permMode').value = $('#setPerm').value;
   state.settings = await hub.settings.get();
+  if (typeof syncSpecialistAgentControls === 'function') syncSpecialistAgentControls();
   updateMeter();
   $('#settingsSaved').textContent = ' Saved.';
   setTimeout(() => ($('#settingsSaved').textContent = ''), 1500);
@@ -1045,21 +1199,277 @@ for (const card of document.querySelectorAll('.account')) {
   card.querySelector('.link').onclick = (e) => hub.accounts.open(e.target.dataset.url);
 }
 
+// ---------------- workspace, titlebar status & live agent visibility ----------------
+
+async function refreshWorkspaceUi() {
+  const cwd = await hub.terminal.cwd().catch(() => '');
+  state.cwd = cwd || '';
+  if ($('#termCwd')) $('#termCwd').textContent = state.cwd;
+  const top = state.cwd ? await hub.git.detect(state.cwd).catch(() => null) : null;
+  state.repoRoot = top || '';
+  let branch = '';
+  let dirty = 0;
+  if (top) {
+    const info = await hub.git.info(top).catch(() => null);
+    if (info) {
+      branch = info.detached ? 'HEAD' : info.branch || '';
+      dirty = info.files?.length || 0;
+    }
+  }
+  state.branch = branch;
+
+  const folderLabel = baseName(state.cwd) || 'workspace';
+  const cwdTitle = `Working directory: ${state.cwd || 'workspace'} (click to change folder)`;
+  if ($('#cwdPillText')) $('#cwdPillText').textContent = folderLabel;
+  if ($('#cwdPill')) $('#cwdPill').title = cwdTitle;
+  if ($('#tbWorkspaceLabel')) $('#tbWorkspaceLabel').textContent = folderLabel;
+  if ($('#tbWorkspacePill')) $('#tbWorkspacePill').title = cwdTitle;
+
+  const branchLabel = branch ? `${branch}${dirty ? ` · ${dirty}*` : ''}` : '';
+  if ($('#branchPill')) {
+    $('#branchPill').hidden = !branch;
+    $('#branchPill').title = top ? `Git repo: ${top} (${branchLabel}) — click to open Git panel` : '';
+  }
+  if ($('#branchPillText')) $('#branchPillText').textContent = branchLabel;
+  if ($('#tbBranchPill')) {
+    $('#tbBranchPill').hidden = !branch;
+    $('#tbBranchPill').title = top ? `Git repo: ${top} (${branchLabel}) — click to open Git panel` : '';
+  }
+  if ($('#tbBranchLabel')) $('#tbBranchLabel').textContent = branchLabel;
+
+  renderTitlebarStatus();
+  renderActivityBar();
+}
+
+async function pickWorkingFolder() {
+  const dir = await hub.settings.pickFolder();
+  if (!dir) return;
+  await hub.terminal.setCwd(dir);
+  if (state.chat) state.chat.cwd = dir;
+  await refreshWorkspaceUi();
+  renderChatList();
+}
+$('#cwdPill')?.addEventListener('click', pickWorkingFolder);
+$('#tbWorkspacePill')?.addEventListener('click', pickWorkingFolder);
+
+async function openRepoInGitPanel() {
+  if (state.repoRoot) {
+    await hub.git.add(state.repoRoot).catch(() => {});
+  }
+  openPanel('git');
+  if (typeof gitActivate === 'function') gitActivate();
+}
+$('#branchPill')?.addEventListener('click', openRepoInGitPanel);
+$('#tbBranchPill')?.addEventListener('click', openRepoInGitPanel);
+
+function renderTitlebarStatus() {
+  const box = $('#tbStatusCenter');
+  if (!box) return;
+  const approvals = [...(state.approvals?.values() || [])];
+  if (approvals.length > 0) {
+    const first = approvals[0];
+    box.innerHTML = `<button class="tb-status-pill approval" title="Click to jump to the chat waiting for your decision">${icon('alert')}<span><b>${approvals.length === 1 ? 'Decision needed' : `${approvals.length} decisions needed`}</b> · ${esc(first.chatTitle || 'Chat')} (${esc(first.title)})</span></button>`;
+    box.querySelector('button').onclick = () => openChat(first.chatId);
+    return;
+  }
+  const ta = state.agentQueue?.testerActive;
+  const tq = state.agentQueue?.testerQueue || [];
+  if (ta) {
+    const stageStr = ta.stepIndex && ta.stepTotal ? ` (Stage ${ta.stepIndex}/${ta.stepTotal})` : '';
+    const qStr = tq.length ? ` · +${tq.length} in queue` : '';
+    box.innerHTML = `<button class="tb-status-pill working" title="Tester Agent running CI pipeline — click to view"><span class="busy-dot"></span><span><b>🧪 Testing ${esc(ta.label)}</b>${esc(stageStr)}${esc(qStr)}</span></button>`;
+    box.querySelector('button').onclick = () => (ta.chatId ? openChat(ta.chatId) : openPanel('git'));
+    return;
+  }
+  const ma = state.agentQueue?.mergerActive;
+  const mq = state.agentQueue?.mergerQueue || [];
+  if (ma) {
+    const qStr = mq.length ? ` · +${mq.length} in queue` : '';
+    box.innerHTML = `<button class="tb-status-pill working" title="Merger Agent checking branches — click to view"><span class="busy-dot"></span><span><b>🔀 Merger: ${esc(ma.label)}</b>${esc(qStr)}</span></button>`;
+    box.querySelector('button').onclick = () => (ma.chatId ? openChat(ma.chatId) : openPanel('git'));
+    return;
+  }
+  if (state.busy.size > 0) {
+    const firstId = [...state.busy][0];
+    const act = state.activities.get(firstId);
+    const where = act?.cwd ? ` in ${baseName(act.cwd)}` : '';
+    const step = act?.label || 'Working…';
+    box.innerHTML = `<button class="tb-status-pill working" title="Click to open the active agent chat"><span class="busy-dot"></span><span><b>${state.busy.size === 1 ? '1 agent working' : `${state.busy.size} agents working`}</b> · ${esc(step)}${esc(where)}</span></button>`;
+    box.querySelector('button').onclick = () => openChat(firstId);
+    return;
+  }
+  const activePulls = [...state.pulls.values()].filter((p) => !p.done);
+  if (activePulls.length > 0) {
+    const p = activePulls[0];
+    const pctStr = p.pct != null ? ` ${p.pct.toFixed(0)}%` : '';
+    box.innerHTML = `<button class="tb-status-pill working" title="Click to view download progress">${icon('download')}<span>Downloading <b>${esc(p.name)}</b>${esc(pctStr)}${p.speed ? ` · ${esc(fmtSpeed(p.speed))}` : ''}</span></button>`;
+    box.querySelector('button').onclick = () => showView('discover');
+    return;
+  }
+  const dotColor = state.ollamaRunning ? 'var(--ok)' : 'var(--warn)';
+  const label = state.ollamaRunning ? `Ollama ${state.ollamaVersion || 'ready'}` : 'Ollama offline';
+  box.innerHTML = `<div class="tb-status-pill" title="System status"><span class="dot" style="background:${dotColor};width:6px;height:6px;border-radius:50%"></span><span>${esc(label)} · ${esc(baseName(state.cwd) || 'Ready')}</span></div>`;
+}
+
+function setActivity(chatId, patch) {
+  const prev = state.activities.get(chatId) || { startedAt: Date.now(), cwd: state.cwd };
+  const next = { ...prev, ...patch };
+  state.activities.set(chatId, next);
+  renderActivityBar();
+  renderTitlebarStatus();
+  renderChatList();
+}
+
+function renderActivityBar() {
+  const bar = $('#agentActivityBar');
+  if (!bar) return;
+  const chatId = state.chat?.id;
+  if (!chatId) {
+    bar.hidden = true;
+    return;
+  }
+  const pendingApp = [...(state.approvals?.values() || [])].find((a) => a.chatId === chatId);
+  const busy = state.busy.has(chatId);
+  if (!busy && !pendingApp) {
+    bar.hidden = true;
+    return;
+  }
+  const act = state.activities.get(chatId) || { label: 'Working…', cwd: state.chat?.cwd || state.cwd, startedAt: Date.now() };
+  const elapsedSec = Math.max(0, Math.floor((Date.now() - (act.startedAt || Date.now())) / 1000));
+  const elapsedStr = elapsedSec >= 60 ? `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s` : `${elapsedSec}s`;
+  const cwdPath = pendingApp?.cwd || act.cwd || state.chat?.cwd || state.cwd;
+  const label = pendingApp ? `Waiting for your decision: ${pendingApp.title}` : act.label || 'Working…';
+  const target = pendingApp ? pendingApp.detail : act.target || '';
+  const panel = pendingApp ? (pendingApp.tool === 'run_command' ? 'terminal' : null) : act.panel;
+
+  bar.hidden = false;
+  bar.classList.toggle('approval', !!pendingApp);
+  bar.innerHTML = `
+    <span class="act-orb"></span>
+    <span class="act-label">${esc(label)}</span>
+    ${target ? `<code class="act-target" title="${esc(target)}">${esc(target.slice(0, 90))}</code>` : ''}
+    ${cwdPath ? `<span class="act-cwd" title="Working in ${esc(cwdPath)}">${icon('folder')}${esc(baseName(cwdPath))}</span>` : ''}
+    <span class="act-timer">${esc(elapsedStr)}</span>
+    ${panel ? `<button type="button" class="mini" data-open-panel="${esc(panel)}">Open ${esc(panel)} →</button>` : ''}`;
+  bar.querySelector('[data-open-panel]')?.addEventListener('click', (e) => {
+    const p = e.currentTarget.dataset.openPanel;
+    openPanel(p);
+    if (p === 'terminal') selectTerm('ai');
+  });
+}
+
+setInterval(() => {
+  if (state.busy.size > 0 || state.approvals?.size > 0) {
+    const timerEl = $('#agentActivityBar .act-timer');
+    const act = state.chat && state.activities.get(state.chat.id);
+    if (timerEl && act?.startedAt) {
+      const s = Math.max(0, Math.floor((Date.now() - act.startedAt) / 1000));
+      timerEl.textContent = s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
+    }
+  }
+}, 1000);
+
 // ---------------- chats ----------------
+
+function shortModelName(modelId) {
+  if (!modelId) return '';
+  const m = modelInfo(modelId);
+  if (m) return m.provider === 'ollama' ? m.name : m.title;
+  return String(modelId).split(':').slice(1).join(':') || modelId;
+}
 
 async function renderChatList() {
   const chats = await hub.chats.list();
   const ul = $('#chatList');
+  if (!ul) return;
   ul.innerHTML = '';
+
+  const approvalCount = state.approvals?.size || 0;
+  const tqCount = (state.agentQueue?.testerQueue?.length || 0) + (state.agentQueue?.mergerQueue?.length || 0);
+  const busyCount = state.busy.size;
+  const summaryEl = $('#chatStatusSummary');
+  if (summaryEl) {
+    if (approvalCount > 0) {
+      summaryEl.className = 'section-meta warn';
+      summaryEl.textContent = `${approvalCount} decision${approvalCount > 1 ? 's' : ''} needed`;
+    } else if (busyCount > 0 || tqCount > 0) {
+      summaryEl.className = 'section-meta';
+      summaryEl.textContent = tqCount > 0 ? `${busyCount} working · ${tqCount} queued` : `${busyCount} working`;
+    } else {
+      summaryEl.className = 'section-meta';
+      summaryEl.textContent = '';
+    }
+  }
+
   for (const c of chats) {
     const li = document.createElement('li');
-    li.classList.toggle('active', state.view === 'chat' && state.chat?.id === c.id);
-    li.innerHTML = `<span class="t">${esc(c.title)}</span>${state.busy.has(c.id) ? '<span class="busy-dot" title="Working…"></span>' : ''}<button class="del" title="Delete chat">✕</button>`;
+    const isActive = state.view === 'chat' && state.chat?.id === c.id;
+    const isBusy = state.busy.has(c.id);
+    const pendingApp = [...(state.approvals?.values() || [])].find((a) => a.chatId === c.id);
+    const act = state.activities.get(c.id);
+    const testerActiveHere = state.agentQueue?.testerActive?.chatId === c.id ? state.agentQueue.testerActive : null;
+    const testerQueuedHere = (state.agentQueue?.testerQueue || []).find((q) => q.chatId === c.id);
+    const mergerActiveHere = state.agentQueue?.mergerActive?.chatId === c.id ? state.agentQueue.mergerActive : null;
+    const mergerQueuedHere = (state.agentQueue?.mergerQueue || []).find((q) => q.chatId === c.id);
+
+    const folder = baseName(pendingApp?.cwd || act?.cwd || c.cwd);
+    const modelShort = shortModelName(c.model);
+
+    li.classList.toggle('active', isActive);
+    li.classList.toggle('needs-approval', !!pendingApp);
+    li.classList.toggle('is-working', isBusy || !!testerActiveHere || !!mergerActiveHere);
+
+    let statusHtml = '';
+    if (pendingApp) {
+      statusHtml = `<div class="chat-status approval ${pendingApp.risk === 'dangerous' ? 'dangerous' : ''}" title="${esc(pendingApp.detail || pendingApp.reason)}">⚠ Decision needed: ${esc(pendingApp.title)}</div>`;
+    } else if (testerActiveHere) {
+      const stg = (testerActiveHere.stages || []).find((s) => s.status === 'running');
+      const stgText = testerActiveHere.stepIndex && testerActiveHere.stepTotal
+        ? `Stage ${testerActiveHere.stepIndex}/${testerActiveHere.stepTotal}${stg ? `: ${stg.label}` : ''}`
+        : testerActiveHere.stepText || 'Running CI tests…';
+      statusHtml = `<div class="chat-status tester-working" title="${esc(testerActiveHere.liveLine || stgText)}">🧪 Tester working · ${esc(stgText)}</div>`;
+    } else if (testerQueuedHere) {
+      statusHtml = `<div class="chat-status tester-queued" title="Waiting in Tester Agent single-MR queue">⏳ Tester Queue #${testerQueuedHere.position} (waiting)</div>`;
+    } else if (mergerActiveHere) {
+      statusHtml = `<div class="chat-status tester-working" title="${esc(mergerActiveHere.stepText || 'Checking branch conflicts')}">🔀 Merger working · ${esc(mergerActiveHere.stepText || 'checking main')}</div>`;
+    } else if (mergerQueuedHere) {
+      statusHtml = `<div class="chat-status tester-queued" title="Waiting in Merger Agent queue">⏳ Merger Queue #${mergerQueuedHere.position}</div>`;
+    } else if (isBusy) {
+      const stepText = act ? `${act.label}${act.target ? `: ${act.target.slice(0, 26)}` : ''}` : 'Working…';
+      statusHtml = `<div class="chat-status working" title="${esc(act?.target || stepText)}">${esc(stepText)}</div>`;
+    }
+
+    const dotHtml = pendingApp
+      ? '<span class="warn-dot" title="Waiting for your decision"></span>'
+      : isBusy || testerActiveHere || mergerActiveHere
+        ? '<span class="busy-dot" title="Agent is working"></span>'
+        : testerQueuedHere || mergerQueuedHere
+          ? '<span class="warn-dot" title="Queued for Tester/Merger"></span>'
+          : '';
+
+    li.innerHTML = `
+      <div class="chat-item-top">
+        ${dotHtml}
+        <span class="t">${esc(c.title)}</span>
+        <button class="del" title="Delete chat">✕</button>
+      </div>
+      ${
+        modelShort || folder
+          ? `<div class="chat-item-meta">
+              ${modelShort ? `<span>${esc(modelShort)}</span>` : ''}
+              ${folder ? `<span class="folder-tag" title="${esc(pendingApp?.cwd || act?.cwd || c.cwd || '')}">📁 ${esc(folder)}</span>` : ''}
+            </div>`
+          : ''
+      }
+      ${statusHtml}`;
     li.onclick = () => openChat(c.id);
     li.querySelector('.del').onclick = async (e) => {
       e.stopPropagation();
       await hub.chats.remove(c.id);
-      if (state.chat?.id === c.id) state.chat = null, renderChat();
+      if (state.chat?.id === c.id) {
+        state.chat = null;
+        renderChat();
+      }
       renderChatList();
     };
     ul.appendChild(li);
@@ -1074,6 +1484,12 @@ async function newChat(model) {
   $('#input').focus();
 }
 $('#newChatBtn').onclick = () => newChat();
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    newChat();
+  }
+});
 
 async function openChat(id) {
   closeCompact();
@@ -1087,14 +1503,15 @@ function renderModelSelect() {
   const current = state.chat?.model || sel.value;
   sel.innerHTML = state.models.length
     ? Object.entries(PROVIDER_LABEL)
-        .map(([p, label]) => {
-          const ms = state.models.filter((m) => groupOf(m) === p);
-          return ms.length ? `<optgroup label="${esc(label)}">${ms.map((m) => `<option value="${esc(m.id)}">${esc(m.provider === 'ollama' ? m.name : m.title)}${m.local ? ` — ${esc(m.title)}` : ''}</option>`).join('')}</optgroup>` : '';
-        })
-        .join('')
+      .map(([p, label]) => {
+        const ms = state.models.filter((m) => groupOf(m) === p);
+        return ms.length ? `<optgroup label="${esc(label)}">${ms.map((m) => `<option value="${esc(m.id)}">${esc(m.provider === 'ollama' ? m.name : m.title)}${m.local ? ` — ${esc(m.title)}` : ''}</option>`).join('')}</optgroup>` : '';
+      })
+      .join('')
     : '<option value="">(no models — open the Library)</option>';
   if (current && state.models.some((m) => m.id === current)) sel.value = current;
   updateModelHint();
+  if (typeof syncSpecialistAgentControls === 'function') syncSpecialistAgentControls();
 }
 // ---------- effort ----------
 const EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -1182,6 +1599,97 @@ function messageEl(m, i, all) {
     el.innerHTML = `<div class="summary-head">${icon('compress')}<b>Summary</b><span class="muted small">turns ${m.turns?.[0]}–${m.turns?.[1]} · ${esc(m.title || '')}</span></div><div class="body">${markdown(m.content.replace(/^\[Summary[^\]]*\]\n?/, ''))}</div>`;
     return el;
   }
+  if (m.kind === 'agent_report') {
+    const r = m.report || {};
+    const isMerger = r.agent === 'merger';
+    const v = r.verdict || r.status || 'warn';
+    const cls = v === 'clean' || v === 'merged' || v === 'pass' ? 'pass' : v === 'conflict' || v === 'fail' ? 'fail' : 'warn';
+    const badgeLabel = isMerger
+      ? v === 'merged'
+        ? '✓ Merged cleanly'
+        : v === 'clean'
+          ? '✓ No conflicts'
+          : '⚠ Merge Conflict'
+      : v === 'pass'
+        ? '✓ Tests Passed'
+        : v === 'fail'
+          ? '✕ Tests Failed'
+          : '⚠ Check Warning';
+    const modelName = shortModelName(r.model) || r.model || 'AI';
+    const metaInfo = isMerger
+      ? `<code>${esc(r.branch || 'branch')}</code> → <code>${esc(r.targetBranch || 'main')}</code>`
+      : r.command
+        ? `<code>${esc(r.command)}</code> (exit ${esc(r.exitCode ?? 0)})`
+        : '';
+
+    let itemsHtml = '';
+    if (isMerger && Array.isArray(r.conflicts) && r.conflicts.length) {
+      itemsHtml = `<div class="agent-report-items">${r.conflicts
+        .map(
+          (c) => `<div class="agent-report-item">
+            <div><b>Conflict in</b> <code>${esc(c.file)}</code></div>
+            ${c.cause ? `<div class="muted">${esc(c.cause)}</div>` : ''}
+            ${c.resolution ? `<div><b>Suggested resolution:</b> ${esc(c.resolution)}</div>` : ''}
+          </div>`
+        )
+        .join('')}</div>`;
+    } else if (!isMerger && Array.isArray(r.failures) && r.failures.length) {
+      itemsHtml = `<div class="agent-report-items">${r.failures
+        .map(
+          (f) => `<div class="agent-report-item">
+            <div><b>${esc(f.test_or_file || f.test || 'Check')}</b> ${f.file ? `in <code>${esc(f.file)}</code>` : ''}</div>
+            ${f.root_cause || f.reason ? `<div class="muted">${esc(f.root_cause || f.reason)}</div>` : ''}
+            ${f.suggested_fix || f.fix ? `<div><b>Suggested fix:</b> ${esc(f.suggested_fix || f.fix)}</div>` : ''}
+          </div>`
+        )
+        .join('')}</div>`;
+    }
+
+    let stepsHtml = '';
+    if (!isMerger && Array.isArray(r.steps) && r.steps.length > 0) {
+      stepsHtml = `<div class="agent-report-items">${r.steps
+        .map(
+          (s, idx) => `<div class="branch-check-row">
+            <span class="chip ${s.passed ? 'loaded' : ''}" style="${s.passed ? '' : 'color:var(--danger);border-color:var(--danger)'}">${s.passed ? '✓ PASS' : `✕ FAIL (${s.exitCode})`}</span>
+            <b>Stage ${idx + 1}/${r.steps.length}:</b> <code>${esc(s.command)}</code>
+            <span class="muted small">${esc(s.label || '')} · ${((s.durationMs || 0) / 1000).toFixed(1)}s</span>
+          </div>`
+        )
+        .join('')}</div>`;
+    }
+
+    const rawOut = r.rawOutput || r.output || '';
+    const needsAction = v === 'conflict' || v === 'fail' || v === 'warn';
+    el.className = `agent-report ${cls}`;
+    el.innerHTML = `
+      <div class="agent-report-head">
+        <b>${icon(isMerger ? 'branch' : 'activity')} ${isMerger ? 'Merger Agent' : 'Tester Agent'}</b>
+        <span class="agent-report-badge">${esc(badgeLabel)}</span>
+        <span class="chip">${esc(modelName)}</span>
+        <span class="muted small">${metaInfo}</span>
+      </div>
+      ${r.summary ? `<div class="body">${markdown(r.summary)}</div>` : ''}
+      ${stepsHtml}
+      ${itemsHtml}
+      ${rawOut ? `<details class="small"><summary class="muted">Raw test / check output</summary><pre class="code" style="max-height:200px;overflow:auto;background:var(--code-bg);padding:8px;border-radius:6px;font-family:var(--mono)">${esc(rawOut)}</pre></details>` : ''}
+      ${
+        needsAction
+          ? m.autoTriggered
+            ? `<div class="agent-report-foot"><span class="chip loaded">✓ Sent to agent automatically</span></div>`
+            : `<div class="agent-report-foot">
+                <button type="button" class="primary mini send-report-btn">${icon('send')} Send report to agent to fix →</button>
+                <span class="muted small">Instructs this chat's model to resolve the reported issues</span>
+              </div>`
+          : ''
+      }`;
+    el.querySelector('.send-report-btn')?.addEventListener('click', async (ev) => {
+      if (!state.chat) return;
+      ev.currentTarget.disabled = true;
+      ev.currentTarget.textContent = 'Sent to agent…';
+      await hub.agents.sendReport({ chatId: state.chat.id, report: r });
+    });
+    return el;
+  }
   if (m.role === 'user') {
     el.className = 'msg user';
     el.textContent = m.content;
@@ -1219,6 +1727,8 @@ function renderChat() {
   for (const a of state.approvals.values()) if (a.chatId === c?.id) box.appendChild(approvalEl(a));
   setBusyUi();
   updateMeter();
+  renderActivityBar();
+  refreshWorkspaceUi();
   box.scrollTop = box.scrollHeight;
 }
 
@@ -1233,6 +1743,8 @@ function setBusyUi() {
   const busy = state.chat && state.busy.has(state.chat.id);
   $('#sendBtn').hidden = !!busy;
   $('#stopBtn').hidden = !busy;
+  renderActivityBar();
+  renderTitlebarStatus();
 }
 
 async function send() {
@@ -1245,6 +1757,7 @@ async function send() {
   if (state.busy.has(state.chat.id)) return;
   $('#input').value = '';
   state.busy.add(state.chat.id);
+  setActivity(state.chat.id, { phase: 'starting', label: 'Starting agent…', target: '', panel: null, model, cwd: state.cwd, startedAt: Date.now() });
   setBusyUi();
   hub.chats.send({ chatId: state.chat.id, model, text, useTools: $('#toolsToggle').checked, effort: state.chat.effort ?? state.effort ?? '' });
 }
@@ -1284,6 +1797,10 @@ function scheduleLiveRender() {
 hub.chats.onEvent((ev) => {
   const current = state.chat?.id === ev.chatId;
   const box = $('#messages');
+  if (ev.cwd && ev.cwd !== state.cwd) {
+    state.cwd = ev.cwd;
+    refreshWorkspaceUi();
+  }
   switch (ev.type) {
     case 'saved':
       if (current) {
@@ -1293,6 +1810,15 @@ hub.chats.onEvent((ev) => {
       renderChatList();
       break;
     case 'start':
+      state.busy.add(ev.chatId);
+      setActivity(ev.chatId, {
+        phase: 'thinking',
+        label: 'Thinking…',
+        target: '',
+        panel: null,
+        model: ev.model,
+        cwd: ev.cwd || state.cwd,
+      });
       if (!current) break;
       {
         const el = document.createElement('div');
@@ -1304,12 +1830,24 @@ hub.chats.onEvent((ev) => {
       }
       break;
     case 'delta':
+      {
+        const act = state.activities.get(ev.chatId);
+        if (!act || act.phase !== 'writing') {
+          setActivity(ev.chatId, { phase: 'writing', label: 'Writing response…', target: '', panel: null });
+        }
+      }
       if (current && state.live) {
         state.live.text += ev.text;
         scheduleLiveRender();
       }
       break;
     case 'thinking':
+      {
+        const act = state.activities.get(ev.chatId);
+        if (!act || act.phase !== 'thinking') {
+          setActivity(ev.chatId, { phase: 'thinking', label: 'Reasoning…', target: '', panel: null });
+        }
+      }
       if (current && state.live) {
         state.live.thinking += ev.text;
         scheduleLiveRender();
@@ -1328,6 +1866,13 @@ hub.chats.onEvent((ev) => {
       box.scrollTop = box.scrollHeight;
       break;
     case 'tool_call':
+      setActivity(ev.chatId, {
+        phase: 'tool',
+        label: ev.label || `Using ${ev.name}`,
+        target: ev.target || '',
+        panel: ev.panel || null,
+        cwd: ev.cwd || state.cwd,
+      });
       // Show the user what the AI is working on.
       if (['web_search', 'open_url', 'read_page', 'click', 'type_text'].includes(ev.name)) openPanel('browser', { auto: true });
       else if (ev.name === 'run_command') {
@@ -1336,6 +1881,15 @@ hub.chats.onEvent((ev) => {
       }
       break;
     case 'review':
+      if (ev.state === 'running') {
+        setActivity(ev.chatId, {
+          phase: 'review',
+          label: 'AI reviewer checking command',
+          target: ev.command || '',
+          panel: 'terminal',
+          cwd: ev.cwd || state.cwd,
+        });
+      }
       if (current) {
         let el = box.querySelector('.review.running');
         if (ev.state === 'running') {
@@ -1363,6 +1917,7 @@ hub.chats.onEvent((ev) => {
     case 'error':
     case 'done':
       state.busy.delete(ev.chatId);
+      state.activities.delete(ev.chatId);
       if (current) {
         if (state.live) {
           state.live.body.classList.remove('cursor');
@@ -1376,7 +1931,10 @@ hub.chats.onEvent((ev) => {
         }
         setBusyUi();
       }
+      renderActivityBar();
+      renderTitlebarStatus();
       renderChatList();
+      refreshWorkspaceUi();
       loadModels(); // refresh "in memory" state
       break;
   }
@@ -1668,6 +2226,70 @@ $('#openSetup').onclick = () => showView('setup');
 
 state.approvals = new Map();
 
+function respondToApproval(id, answer) {
+  const a = state.approvals.get(id);
+  if (!a) return;
+  hub.approvals.respond(id, answer);
+  state.approvals.delete(id);
+
+  // Update inline approval card if rendered in #messages
+  const inlineEl = document.querySelector(`.approval[data-id="${CSS.escape(id)}"]`);
+  if (inlineEl) {
+    inlineEl.innerHTML = `<span class="muted">${answer === 'deny' ? '✕ Denied' : '✓ Allowed'}: ${esc(a.title.toLowerCase())}</span>`;
+    inlineEl.className = 'approval done';
+  }
+  if (answer === 'always') loadSettings();
+  renderGlobalApprovals();
+  renderActivityBar();
+  renderTitlebarStatus();
+  renderChatList();
+}
+
+function renderGlobalApprovals() {
+  const bar = $('#globalApprovalBar');
+  if (!bar) return;
+  const list = [...state.approvals.values()];
+  if (!list.length) {
+    bar.hidden = true;
+    bar.innerHTML = '';
+    return;
+  }
+  const a = list[0];
+  const isCurrentChat = state.view === 'chat' && state.chat?.id === a.chatId;
+  const canAlways = a.tool === 'run_command' && a.risk !== 'dangerous';
+  const alwaysPrefix = a.detail ? a.detail.trim().split(/\s+/).slice(0, 2).join(' ') : '';
+  const modelLabel = shortModelName(a.model);
+
+  bar.hidden = false;
+  bar.className = `global-approval-bar ${a.risk === 'dangerous' ? 'dangerous' : ''}`;
+  bar.innerHTML = `
+    <div class="gab-left">
+      <span class="gab-badge">${icon('alert')}${list.length > 1 ? `1 of ${list.length} Decisions Needed` : 'Decision Needed'}</span>
+      <div class="gab-info">
+        <div class="gab-title">
+          <b>${esc(a.title)}?</b>
+          <span class="chip">${esc(a.risk)}</span>
+          <span class="muted small">in chat <b>${esc(a.chatTitle || 'Chat')}</b>${modelLabel ? ` (${esc(modelLabel)})` : ''}${a.cwd ? ` · 📁 ${esc(baseName(a.cwd))}` : ''}</span>
+        </div>
+        <div class="gab-cmd" title="${esc(a.detail)}">${esc(a.detail)}</div>
+      </div>
+    </div>
+    <div class="gab-actions">
+      <button class="primary mini" data-ga="allow">Allow once</button>
+      ${canAlways ? `<button class="mini" data-ga="always" title="Always allow commands starting with ${esc(alwaysPrefix)}">Always allow "${esc(alwaysPrefix)}"</button>` : ''}
+      <button class="danger mini" data-ga="deny">Deny</button>
+      ${!isCurrentChat ? `<button class="mini" data-ga="open">Open chat →</button>` : ''}
+    </div>`;
+  bar.querySelectorAll('[data-ga]').forEach((b) => (b.onclick = () => {
+    const act = b.dataset.ga;
+    if (act === 'open') {
+      openChat(a.chatId);
+      return;
+    }
+    respondToApproval(a.id, act);
+  }));
+}
+
 function approvalEl(a) {
   const el = document.createElement('div');
   el.className = `approval risk-${a.risk}`;
@@ -1682,13 +2304,7 @@ function approvalEl(a) {
       ${canAlways ? `<button data-a="always" title="Don't ask again for commands starting with this">Always allow "${esc(a.detail.trim().split(/\s+/).slice(0, 2).join(' '))}"</button>` : ''}
       <button class="danger" data-a="deny">Deny</button>
     </div>`;
-  el.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => {
-    hub.approvals.respond(a.id, b.dataset.a);
-    state.approvals.delete(a.id);
-    el.innerHTML = `<span class="muted">${b.dataset.a === 'deny' ? '✕ Denied' : '✓ Allowed'}: ${esc(a.title.toLowerCase())}</span>`;
-    el.className = 'approval done';
-    if (b.dataset.a === 'always') loadSettings();
-  }));
+  el.querySelectorAll('[data-a]').forEach((b) => (b.onclick = () => respondToApproval(a.id, b.dataset.a)));
   return el;
 }
 
@@ -1699,6 +2315,9 @@ hub.approvals.onRequest((a) => {
     box.appendChild(approvalEl(a));
     box.scrollTop = box.scrollHeight;
   }
+  renderGlobalApprovals();
+  renderActivityBar();
+  renderTitlebarStatus();
   renderChatList();
 });
 
@@ -1707,6 +2326,7 @@ hub.approvals.onRequest((a) => {
 const termRuns = new Map();
 async function refreshCwd() {
   $('#termCwd').textContent = await hub.terminal.cwd();
+  refreshWorkspaceUi();
 }
 hub.terminal.onStart(({ runId, command, cwd, source }) => {
   const el = document.createElement('div');
@@ -1732,6 +2352,8 @@ hub.terminal.onEnd(({ runId, exitCode, cwd }) => {
   el.querySelector('.term-exit').textContent = `exit ${exitCode}`;
   el.querySelector('.term-exit').classList.toggle('bad', exitCode !== 0);
   $('#termCwd').textContent = cwd;
+  state.cwd = cwd;
+  refreshWorkspaceUi();
   termRuns.delete(runId);
 });
 // ---------------- git ----------------
@@ -1983,9 +2605,524 @@ document.querySelectorAll('.git-subtabs [data-gsub]').forEach((b) => (b.onclick 
   $('#git-changes').hidden = gitState.sub !== 'changes';
   $('#git-history').hidden = gitState.sub !== 'history';
   $('#git-knowledge').hidden = gitState.sub !== 'knowledge';
+  if ($('#git-agents')) $('#git-agents').hidden = gitState.sub !== 'agents';
   if (gitState.sub === 'history') renderGitLog();
   if (gitState.sub === 'knowledge') renderKnowledge();
+  if (gitState.sub === 'agents') renderGitAgents();
 }));
+
+function syncSpecialistAgentControls() {
+  const s = state.settings || {};
+  const chatModelLabel = shortModelName($('#modelSelect')?.value) || 'chat model';
+  const compactOpts =
+    `<option value="">Model: ${esc(chatModelLabel)}</option>` +
+    state.models
+      .filter((m) => !/embed/.test(m.name))
+      .map((m) => `<option value="${esc(m.id)}">${esc(m.provider === 'ollama' ? m.name : m.title)}${PROVIDER_SUFFIX[m.provider] || (m.cloud ? '' : ' (local)')}</option>`)
+      .join('');
+
+  // Toggles
+  const tEnabled = !!s.testerEnabled;
+  const mEnabled = !!s.mergerEnabled;
+  if ($('#testerToggle')) $('#testerToggle').checked = tEnabled;
+  if ($('#gitTesterToggle')) $('#gitTesterToggle').checked = tEnabled;
+  if ($('#setTester')) $('#setTester').checked = tEnabled;
+  $('#testerHeaderGroup')?.classList.toggle('enabled', tEnabled);
+
+  if ($('#mergerToggle')) $('#mergerToggle').checked = mEnabled;
+  if ($('#gitMergerToggle')) $('#gitMergerToggle').checked = mEnabled;
+  if ($('#setMerger')) $('#setMerger').checked = mEnabled;
+  $('#mergerHeaderGroup')?.classList.toggle('enabled', mEnabled);
+
+  // Model selects
+  for (const sel of [$('#headerTesterModel'), $('#gitTesterModel')]) {
+    if (!sel) continue;
+    sel.innerHTML = compactOpts;
+    sel.value = s.testerModel || '';
+  }
+  for (const sel of [$('#headerMergerModel'), $('#gitMergerModel')]) {
+    if (!sel) continue;
+    sel.innerHTML = compactOpts;
+    sel.value = s.mergerModel || '';
+  }
+  if ($('#gitMergerTarget') && !$('#gitMergerTarget').dataset.touched) {
+    $('#gitMergerTarget').value = s.mergerTargetBranch || 'main';
+  }
+  if ($('#gitTesterCmd') && !$('#gitTesterCmd').dataset.touched) {
+    $('#gitTesterCmd').value = s.testerCommand || '';
+  }
+}
+
+function renderGitAgents() {
+  syncSpecialistAgentControls();
+}
+
+async function updateSpecialistSetting(patch) {
+  state.settings = { ...(state.settings || {}), ...patch };
+  syncSpecialistAgentControls();
+  await hub.settings.set(patch);
+}
+
+$('#testerToggle')?.addEventListener('change', (e) => updateSpecialistSetting({ testerEnabled: e.target.checked }));
+$('#gitTesterToggle')?.addEventListener('change', (e) => updateSpecialistSetting({ testerEnabled: e.target.checked }));
+$('#headerTesterModel')?.addEventListener('change', (e) => updateSpecialistSetting({ testerModel: e.target.value }));
+$('#gitTesterModel')?.addEventListener('change', (e) => updateSpecialistSetting({ testerModel: e.target.value }));
+
+$('#mergerToggle')?.addEventListener('change', (e) => updateSpecialistSetting({ mergerEnabled: e.target.checked }));
+$('#gitMergerToggle')?.addEventListener('change', (e) => updateSpecialistSetting({ mergerEnabled: e.target.checked }));
+$('#headerMergerModel')?.addEventListener('change', (e) => updateSpecialistSetting({ mergerModel: e.target.value }));
+$('#gitMergerModel')?.addEventListener('change', (e) => updateSpecialistSetting({ mergerModel: e.target.value }));
+
+$('#gitMergerTarget')?.addEventListener('input', (e) => (e.target.dataset.touched = '1'));
+$('#gitTesterCmd')?.addEventListener('input', (e) => (e.target.dataset.touched = '1'));
+
+function renderMergerSummaryBox(res, box) {
+  if (!box) return;
+  if (!res?.ok) {
+    box.innerHTML = `<div class="error">${esc(res?.error || 'Merger Agent failed')}</div>`;
+    return;
+  }
+  if (!res.results?.length) {
+    box.innerHTML = `<div class="muted">${esc(res.summary || `No task branches other than ${res.targetBranch || 'main'} found.`)}</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div><b>${esc(res.summary)}</b> <span class="muted small">(target: <code>${esc(res.targetBranch)}</code>)</span></div>
+    ${res.results
+      .map((r) => {
+        const badge =
+          r.verdict === 'merged'
+            ? '<span class="chip loaded">✓ merged</span>'
+            : r.verdict === 'clean'
+              ? '<span class="chip loaded">✓ clean</span>'
+              : '<span class="chip" style="color:var(--danger);border-color:var(--danger)">⚠ conflict</span>';
+        return `<div class="branch-check-row">
+          ${badge}
+          <code>${esc(r.branch)}</code> → <code>${esc(r.targetBranch)}</code>
+          ${r.ownerChatTitle ? `<span class="muted small">· chat: <b>${esc(r.ownerChatTitle)}</b></span>` : ''}
+          <span class="spacer"></span>
+          ${
+            r.verdict === 'conflict' && (r.ownerChatId || state.chat?.id)
+              ? `<button type="button" class="mini primary" data-send-branch="${esc(r.branch)}">Send to agent →</button>`
+              : ''
+          }
+        </div>`;
+      })
+      .join('')}`;
+  box.querySelectorAll('[data-send-branch]').forEach((btn) => {
+    btn.onclick = async () => {
+      const br = btn.dataset.sendBranch;
+      const r = res.results.find((x) => x.branch === br);
+      const targetChat = r?.ownerChatId || state.chat?.id;
+      if (!r || !targetChat) return;
+      btn.disabled = true;
+      btn.textContent = 'Sent ✓';
+      await hub.agents.sendReport({ chatId: targetChat, report: r });
+      openChat(targetChat);
+    };
+  });
+}
+
+async function triggerMerger({ performMerge = false, fromHeader = false } = {}) {
+  const repo = fromHeader ? state.repoRoot || gitState.repo : gitState.repo || state.repoRoot;
+  const modelId = (
+    (fromHeader ? $('#headerMergerModel')?.value : $('#gitMergerModel')?.value) ||
+    state.settings?.mergerModel ||
+    $('#modelSelect')?.value ||
+    ''
+  ).trim();
+  const targetBranch = ($('#gitMergerTarget')?.value || state.settings?.mergerTargetBranch || 'main').trim();
+  const group = $('#mergerHeaderGroup');
+  const btn = $('#runMergerBtn');
+  const lbl = $('#mergerBtnLabel');
+  if (btn) btn.disabled = true;
+  group?.classList.add('running');
+  if (lbl) lbl.textContent = performMerge ? 'Merging…' : 'Checking…';
+  const box = $('#gitMergerStatus');
+  if (box) box.innerHTML = `<div class="muted">Merger Agent is checking branches against <code>${esc(targetBranch)}</code>…</div>`;
+  try {
+    const res = await hub.agents.runMerger({
+      chatId: state.chat?.id,
+      repo,
+      targetBranch,
+      performMerge,
+      modelId,
+      autoSend: state.settings?.mergerAutoSend ?? false,
+    });
+    renderMergerSummaryBox(res, box);
+    const hasConflict = res?.results?.some((r) => r.verdict === 'conflict');
+    group?.classList.remove('running');
+    group?.classList.add(!res?.ok || hasConflict ? 'fail' : 'pass');
+    if (lbl) lbl.textContent = !res?.ok ? 'Merger ✕' : hasConflict ? 'Conflict ⚠' : performMerge ? 'Merged ✓' : 'Clean ✓';
+    if (!res?.ok && state.view === 'chat' && fromHeader) {
+      openPanel('git');
+      document.querySelector('.git-subtabs [data-gsub="agents"]')?.click();
+    }
+    gitRefresh(true);
+    refreshWorkspaceUi();
+  } finally {
+    if (btn) btn.disabled = false;
+    setTimeout(() => {
+      group?.classList.remove('running', 'pass', 'fail');
+      if (lbl) lbl.textContent = 'Merger';
+    }, 5000);
+  }
+}
+
+async function triggerTester({ fromHeader = false } = {}) {
+  const cwd = fromHeader ? state.chat?.cwd || state.cwd || gitState.repo : gitState.repo || state.chat?.cwd || state.cwd;
+  const modelId = (
+    (fromHeader ? $('#headerTesterModel')?.value : $('#gitTesterModel')?.value) ||
+    state.settings?.testerModel ||
+    $('#modelSelect')?.value ||
+    ''
+  ).trim();
+  const customCommand = ($('#gitTesterCmd')?.value || state.settings?.testerCommand || '').trim();
+  const group = $('#testerHeaderGroup');
+  const btn = $('#runTesterBtn');
+  const lbl = $('#testerBtnLabel');
+  if (btn) btn.disabled = true;
+  group?.classList.add('running');
+  if (lbl) lbl.textContent = 'Testing…';
+  const box = $('#gitTesterStatus');
+  if (box) box.innerHTML = `<div class="muted">Tester Agent is running CI pipeline checks (1 MR at a time)…</div>`;
+  try {
+    const res = await hub.agents.runTester({
+      chatId: state.chat?.id,
+      cwd,
+      customCommand,
+      modelId,
+      autoSend: state.settings?.testerAutoSend ?? false,
+    });
+    if (box) {
+      if (!res?.ok) {
+        box.innerHTML = `<div class="error">${esc(res?.error || 'Tester Agent failed')}</div>`;
+      } else {
+        const badge =
+          res.verdict === 'pass'
+            ? '<span class="chip loaded">✓ PASS</span>'
+            : res.verdict === 'fail'
+              ? '<span class="chip" style="color:var(--danger);border-color:var(--danger)">✕ FAIL</span>'
+              : '<span class="chip" style="color:var(--warn);border-color:var(--warn)">⚠ WARN</span>';
+        const stepsRows = (res.steps || [])
+          .map(
+            (s, i) => `<div class="branch-check-row">
+              <span class="chip ${s.passed ? 'loaded' : ''}" style="${s.passed ? '' : 'color:var(--danger);border-color:var(--danger)'}">${s.passed ? '✓' : '✕'}</span>
+              <b>${i + 1}/${res.steps.length}:</b> <code>${esc(s.command)}</code>
+              <span class="muted small">${((s.durationMs || 0) / 1000).toFixed(1)}s</span>
+            </div>`
+          )
+          .join('');
+        box.innerHTML = `
+          <div class="row wrap">${badge} <code>${esc(res.command || '')}</code> <span class="muted small">(exit ${esc(res.exitCode ?? 0)})</span></div>
+          <div>${esc(res.summary || '')}</div>
+          ${stepsRows}`;
+      }
+    }
+    group?.classList.remove('running');
+    group?.classList.add(res?.verdict === 'pass' ? 'pass' : 'fail');
+    if (lbl) lbl.textContent = res?.verdict === 'pass' ? 'Tests ✓' : 'Tests ✕';
+  } finally {
+    if (btn) btn.disabled = false;
+    setTimeout(() => {
+      group?.classList.remove('running', 'pass', 'fail');
+      if (lbl) lbl.textContent = 'Tester';
+    }, 5000);
+  }
+}
+
+$('#runTesterBtn')?.addEventListener('click', () => triggerTester({ fromHeader: true }));
+$('#runMergerBtn')?.addEventListener('click', () => triggerMerger({ performMerge: false, fromHeader: true }));
+$('#gitMergerCheck')?.addEventListener('click', () => triggerMerger({ performMerge: false, fromHeader: false }));
+$('#gitMergerMerge')?.addEventListener('click', () => triggerMerger({ performMerge: true, fromHeader: false }));
+$('#gitTesterRun')?.addEventListener('click', () => triggerTester({ fromHeader: false }));
+
+function renderStageChip(s, cls = 'saq-stage') {
+  const sym = s.status === 'pass' ? '✓' : s.status === 'fail' ? '✕' : s.status === 'running' ? '●' : '○';
+  const dur = s.durationMs != null ? ` (${(s.durationMs / 1000).toFixed(1)}s)` : '';
+  return `<span class="${cls} ${esc(s.status || 'pending')}" title="${esc(s.command || s.label)}">${sym} ${s.index}. ${esc(s.label)}${esc(dur)}</span>`;
+}
+
+function renderAgentQueueUi() {
+  const { testerActive, testerQueue = [], mergerActive, mergerQueue = [] } = state.agentQueue || {};
+  const hasTester = !!testerActive || testerQueue.length > 0;
+  const hasMerger = !!mergerActive || mergerQueue.length > 0;
+
+  // 1. Header pill labels & queue badges
+  const tGroup = $('#testerHeaderGroup');
+  const tLbl = $('#testerBtnLabel');
+  if (tLbl && !tGroup?.classList.contains('pass') && !tGroup?.classList.contains('fail')) {
+    tGroup?.classList.toggle('running', hasTester);
+    if (testerActive) {
+      const stagePart = testerActive.stepIndex && testerActive.stepTotal ? ` ${testerActive.stepIndex}/${testerActive.stepTotal}` : '…';
+      const qBadge = testerQueue.length ? `<span class="ac-qbadge" title="${testerQueue.length} MR(s) waiting in queue">+${testerQueue.length}</span>` : '';
+      tLbl.innerHTML = `Testing${esc(stagePart)}${qBadge}`;
+    } else if (testerQueue.length) {
+      tLbl.innerHTML = `Tester <span class="ac-qbadge">+${testerQueue.length}</span>`;
+    } else {
+      tLbl.textContent = 'Tester';
+    }
+  }
+  const mGroup = $('#mergerHeaderGroup');
+  const mLbl = $('#mergerBtnLabel');
+  if (mLbl && !mGroup?.classList.contains('pass') && !mGroup?.classList.contains('fail')) {
+    mGroup?.classList.toggle('running', hasMerger);
+    if (mergerActive) {
+      const qBadge = mergerQueue.length ? `<span class="ac-qbadge">+${mergerQueue.length}</span>` : '';
+      mLbl.innerHTML = `Merging…${qBadge}`;
+    } else if (mergerQueue.length) {
+      mLbl.innerHTML = `Merger <span class="ac-qbadge">+${mergerQueue.length}</span>`;
+    } else {
+      mLbl.textContent = 'Merger';
+    }
+  }
+
+  // 2. Left Sidebar Agent Queue Tray (#sidebarAgentQueue)
+  const sb = $('#sidebarAgentQueue');
+  if (sb) {
+    if (!hasTester && !hasMerger) {
+      sb.hidden = true;
+      sb.innerHTML = '';
+    } else {
+      sb.hidden = false;
+      const sections = [];
+      if (hasTester) {
+        const stages = testerActive?.stages || [];
+        const pct =
+          testerActive?.stepTotal > 0
+            ? Math.min(100, Math.round((((testerActive.stepIndex || 1) - 0.5) / testerActive.stepTotal) * 100))
+            : 50;
+        const modelTag = testerActive?.model ? shortModelName(testerActive.model) : '';
+        sections.push(`
+          <div class="saq-section">
+            <div class="sidebar-pulls-head">
+              <span><span class="busy-dot"></span> 🧪 Tester Agent (1 MR at a time)</span>
+              <button type="button" class="link small" data-open-git-agents="1">Details</button>
+            </div>
+            ${
+              testerActive
+                ? `<div class="saq-active-card" data-jump-chat="${esc(testerActive.chatId || '')}" title="Click to open this MR's chat">
+                    <div class="saq-top">
+                      <span class="t">Working: ${esc(testerActive.label)}</span>
+                      ${testerActive.stepIndex && testerActive.stepTotal ? `<span class="chip">${testerActive.stepIndex}/${testerActive.stepTotal}</span>` : ''}
+                    </div>
+                    <div class="saq-sub">
+                      <span>${testerActive.branch ? `🌿 ${esc(testerActive.branch)}` : esc(baseName(testerActive.repo))}</span>
+                      ${modelTag ? `<span>🤖 ${esc(modelTag)}</span>` : ''}
+                    </div>
+                    <div class="bar"><div style="width:${pct}%"></div></div>
+                    ${stages.length ? `<div class="saq-stages">${stages.map((s) => renderStageChip(s, 'saq-stage')).join('')}</div>` : ''}
+                    ${testerActive.liveLine ? `<div class="saq-live" title="${esc(testerActive.liveLine)}">▸ ${esc(testerActive.liveLine)}</div>` : ''}
+                  </div>`
+                : ''
+            }
+            ${
+              testerQueue.length
+                ? `<div class="saq-queue-head">
+                    <span>Waiting Queue (${testerQueue.length})</span>
+                    <span>FIFO</span>
+                  </div>
+                  <div class="saq-queue-list">
+                    ${testerQueue
+                      .map(
+                        (q) => `
+                      <div class="saq-queue-item" data-jump-chat="${esc(q.chatId || '')}" title="Waiting for current MR test to finish — click to open chat">
+                        <span class="saq-qpos">#${q.position}</span>
+                        <span class="saq-qname">${esc(q.label)}</span>
+                        ${q.branch ? `<span class="saq-qbranch">${esc(q.branch)}</span>` : ''}
+                      </div>`
+                      )
+                      .join('')}
+                  </div>`
+                : `<div class="muted small" style="font-size:10.5px">Queue empty — next MR runs immediately</div>`
+            }
+          </div>`);
+      }
+      if (hasMerger) {
+        const modelTag = mergerActive?.model ? shortModelName(mergerActive.model) : '';
+        sections.push(`
+          <div class="saq-section">
+            <div class="sidebar-pulls-head">
+              <span><span class="busy-dot"></span> 🔀 Merger Agent</span>
+              <button type="button" class="link small" data-open-git-agents="1">Details</button>
+            </div>
+            ${
+              mergerActive
+                ? `<div class="saq-active-card" data-jump-chat="${esc(mergerActive.chatId || '')}">
+                    <div class="saq-top"><span class="t">Checking: ${esc(mergerActive.label)}</span></div>
+                    <div class="saq-sub">
+                      <span>→ ${esc(mergerActive.targetBranch || 'main')}</span>
+                      ${modelTag ? `<span>🤖 ${esc(modelTag)}</span>` : ''}
+                    </div>
+                    ${mergerActive.stepText ? `<div class="saq-live">▸ ${esc(mergerActive.stepText)}</div>` : ''}
+                  </div>`
+                : ''
+            }
+            ${
+              mergerQueue.length
+                ? `<div class="saq-queue-head"><span>Merger Queue (${mergerQueue.length})</span></div>
+                  <div class="saq-queue-list">
+                    ${mergerQueue
+                      .map(
+                        (q) => `<div class="saq-queue-item" data-jump-chat="${esc(q.chatId || '')}">
+                          <span class="saq-qpos">#${q.position}</span>
+                          <span class="saq-qname">${esc(q.label)}</span>
+                        </div>`
+                      )
+                      .join('')}
+                  </div>`
+                : ''
+            }
+          </div>`);
+      }
+      sb.innerHTML = sections.join('');
+      sb.querySelectorAll('[data-jump-chat]').forEach((el) => {
+        el.onclick = () => {
+          const cid = el.dataset.jumpChat;
+          if (cid) openChat(cid);
+        };
+      });
+      sb.querySelectorAll('[data-open-git-agents]').forEach((btn) => {
+        btn.onclick = () => {
+          openPanel('git');
+          document.querySelector('.git-subtabs [data-gsub="agents"]')?.click();
+        };
+      });
+    }
+  }
+
+  // 3. Top-of-composer Visual Pipeline & Queue Bar (#specialistAgentBar)
+  const sab = $('#specialistAgentBar');
+  if (sab) {
+    if (!hasTester && !hasMerger) {
+      sab.hidden = true;
+      sab.innerHTML = '';
+    } else {
+      sab.hidden = false;
+      const rows = [];
+      if (hasTester) {
+        const stages = testerActive?.stages || [];
+        const stepperHtml = stages
+          .map((s, idx) => `${idx > 0 ? '<span class="sab-arrow">→</span>' : ''}${renderStageChip(s, 'sab-step')}`)
+          .join('');
+        const modelName = testerActive?.model ? shortModelName(testerActive.model) : '';
+        rows.push(`
+          <div class="sab-row">
+            <span class="sab-pill"><span class="busy-dot"></span> 🧪 Tester Agent Working</span>
+            ${
+              testerActive
+                ? `<span class="sab-title">${esc(testerActive.label)}</span>
+                   ${testerActive.branch ? `<span class="sab-meta">🌿 ${esc(testerActive.branch)}</span>` : ''}
+                   ${modelName ? `<span class="sab-meta">· 🤖 ${esc(modelName)}</span>` : ''}`
+                : ''
+            }
+            <span class="spacer"></span>
+            <span class="sab-meta">1 MR at a time</span>
+          </div>
+          ${stepperHtml ? `<div class="sab-stepper">${stepperHtml}</div>` : ''}
+          ${testerActive?.liveLine ? `<div class="sab-live">▸ ${esc(testerActive.liveLine)}</div>` : ''}
+          <div class="sab-queue-strip">
+            <span class="sab-queue-label">Queue (${testerQueue.length} waiting):</span>
+            ${
+              testerQueue.length
+                ? testerQueue
+                    .map(
+                      (q) =>
+                        `<button type="button" class="sab-queue-chip" data-jump-chat="${esc(q.chatId || '')}" title="Click to switch to ${esc(q.label)}"><b>#${q.position}</b> ${esc(q.label)}${q.branch ? ` <code>${esc(q.branch)}</code>` : ''}</button>`
+                    )
+                    .join('')
+                : `<span class="muted small">No other MRs waiting in queue</span>`
+            }
+          </div>`);
+      }
+      if (hasMerger) {
+        rows.push(`
+          <div class="sab-row">
+            <span class="sab-pill"><span class="busy-dot"></span> 🔀 Merger Agent Working</span>
+            <span class="sab-title">${esc(mergerActive?.label || '')}</span>
+            <span class="sab-meta">${esc(mergerActive?.stepText || `Checking against ${mergerActive?.targetBranch || 'main'}…`)}</span>
+            ${
+              mergerQueue.length
+                ? `<span class="spacer"></span><span class="sab-queue-label">Queued: ${mergerQueue.map((q) => `#${q.position} ${esc(q.label)}`).join(', ')}</span>`
+                : ''
+            }
+          </div>`);
+      }
+      sab.innerHTML = rows.join('');
+      sab.querySelectorAll('[data-jump-chat]').forEach((btn) => {
+        btn.onclick = () => {
+          const cid = btn.dataset.jumpChat;
+          if (cid) openChat(cid);
+        };
+      });
+    }
+  }
+
+  // 4. Git → Agents tab live queue status (#gitTesterStatus)
+  const box = $('#gitTesterStatus');
+  if (box && hasTester) {
+    const stages = testerActive?.stages || [];
+    const qRows = testerQueue
+      .map(
+        (q) =>
+          `<div class="branch-check-row"><span class="saq-qpos">Queued #${q.position}</span> <b>${esc(q.label)}</b> ${q.branch ? `<code>${esc(q.branch)}</code>` : ''}</div>`
+      )
+      .join('');
+    box.innerHTML = `
+      ${
+        testerActive
+          ? `<div class="branch-check-row">
+              <span class="busy-dot"></span>
+              <b>Testing now:</b> ${esc(testerActive.label)}
+              ${testerActive.branch ? `<code>${esc(testerActive.branch)}</code>` : ''}
+              <span class="muted small">${esc(testerActive.stepText || '')}</span>
+            </div>
+            ${stages.length ? `<div class="saq-stages">${stages.map((s) => renderStageChip(s, 'saq-stage')).join('')}</div>` : ''}
+            ${testerActive.liveLine ? `<div class="sab-live">▸ ${esc(testerActive.liveLine)}</div>` : ''}`
+          : ''
+      }
+      ${qRows}`;
+  }
+}
+
+hub.agents?.onEvent((ev) => {
+  if (ev.state === 'queue_update') {
+    state.agentQueue = {
+      testerActive: ev.testerActive || null,
+      testerQueue: ev.testerQueue || [],
+      mergerActive: ev.mergerActive || null,
+      mergerQueue: ev.mergerQueue || [],
+    };
+    renderAgentQueueUi();
+    renderTitlebarStatus();
+    renderChatList();
+    return;
+  }
+
+  const targetChatId = ev.chatId || state.chat?.id;
+  if (ev.state === 'done' || ev.state === 'error') {
+    if (targetChatId) {
+      state.busy.delete(targetChatId);
+      state.activities.delete(targetChatId);
+      renderActivityBar();
+      renderTitlebarStatus();
+      renderChatList();
+    }
+    renderAgentQueueUi();
+    return;
+  }
+  if (targetChatId) {
+    state.busy.add(targetChatId);
+    setActivity(targetChatId, {
+      phase: ev.agent,
+      label: ev.label || ev.text || `${ev.agent === 'merger' ? 'Merger' : 'Tester'} Agent working…`,
+      target: ev.command || ev.branch || '',
+      panel: 'git',
+      cwd: ev.cwd || ev.repo || state.cwd,
+    });
+  }
+  renderAgentQueueUi();
+});
 
 $('#gitRepo').onchange = async () => {
   gitState.repo = $('#gitRepo').value;
@@ -2420,6 +3557,7 @@ function applyLayout() {
     t.classList.toggle('in-split', t.dataset.tab === b);
   });
   $('#toolsToggleBtn').classList.toggle('active', state.panelOpen);
+  $('#tbToolsBtn')?.classList.toggle('tb-branch', state.panelOpen);
   $('#autoOpenTools').checked = layout.autoOpen;
   document.querySelectorAll('#dockMenu [data-dock]').forEach((x) => x.classList.toggle('on', x.dataset.dock === layout.dock));
 
@@ -2459,6 +3597,7 @@ function togglePanel() {
 document.querySelectorAll('.tab[data-tab]').forEach((t) => (t.onclick = () => openPanel(t.dataset.tab)));
 $('#collapsePanel').onclick = closePanel;
 $('#toolsToggleBtn').onclick = togglePanel;
+$('#tbToolsBtn')?.addEventListener('click', togglePanel);
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'j') {
     e.preventDefault();
@@ -2737,8 +3876,10 @@ document.querySelectorAll('.android-nav [data-key]').forEach((b) => (b.onclick =
     state.settings = st;
     $('#permMode').value = st.permissionMode;
     applyTheme(st.theme);
+    syncSpecialistAgentControls();
   });
   applyLayout(); // tools panel starts hidden
+  refreshWorkspaceUi();
   let running = await refreshStatus();
   if (!running) {
     // Ollama installed but not started — start it automatically.
@@ -2757,5 +3898,5 @@ document.querySelectorAll('.android-nav [data-key]').forEach((b) => (b.onclick =
 })();
 
 // Debug/automation handle (used by smoke tests).
-window.__app = { state, openChat, send, showView, openPanel, renderChat };
+window.__app = { state, openChat, send, showView, openPanel, renderChat, refreshWorkspaceUi };
 window.ptyStateDebug = () => ptyState;
